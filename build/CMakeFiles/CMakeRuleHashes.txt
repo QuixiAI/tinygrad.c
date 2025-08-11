@@ -1,0 +1,2 @@
+# Hashes of file build rules.
+4bc1df223c905b6e30d21be3fa7f2cff CMakeFiles/tinygradc_manifest

@@ -1,0 +1,1 @@
+/usr/bin/cc  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/resnet18_cpu.dir/examples/resnet18_cpu.c.o -o resnet18_cpu  libtinygradc.a

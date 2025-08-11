@@ -1,0 +1,1 @@
+/usr/bin/cc  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/test_resnet18.dir/tests/test_resnet18.c.o -o test_resnet18  libtinygradc.a
