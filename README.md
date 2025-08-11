@@ -1,3 +1,5 @@
+A port of tinygrad to a pure-C core with a stable ABI. tinygrad’s philosophy, but usable from any programming language and even in the browser.
+
 <div align="center">
 
 <picture>
