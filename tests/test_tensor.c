@@ -12,6 +12,6 @@ int main(){
   for (int i=0;i<6;i++) assert(out[i]==data[i]);
   assert(tgTensorDestroy(t) == 0);
   assert(tgDestroyContext(ctx) == 0);
-  printf("test_tensor: OK\\n");
+  printf("test_tensor: OK");
   return 0;
 }
