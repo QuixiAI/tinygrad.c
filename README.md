@@ -85,9 +85,9 @@ Tests are built as executables and also registered with `ctest`.
 **Run directly:**
 
 ```bash
-./build/test_tensor
-./build/test_ops
-./build/test_resnet18
+./build/test_tensor; echo
+./build/test_ops; echo
+./build/test_resnet18; echo
 ```
 
 **Or run all with CTest:**
