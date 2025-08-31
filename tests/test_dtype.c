@@ -240,11 +240,11 @@ void test_dtype_from_py() {
     
     // Python: assert dtypes.from_py(2) == dtypes.default_int
     DType dt_int = dtypes_from_py_int(2);
-    ASSERT(dtype_eq(&dt_int, &dtypes.default_int));
+    ASSERT(dtype_eq(&dt_int, dtypes.default_int));
     
     // Python: assert dtypes.from_py(3.0) == dtypes.default_float
     DType dt_float = dtypes_from_py_float(3.0);
-    ASSERT(dtype_eq(&dt_float, &dtypes.default_float));
+    ASSERT(dtype_eq(&dt_float, dtypes.default_float));
 }
 
 // Test truncate_fp16 - based on test_dtype_spec.py:test_truncate_fp16
@@ -271,12 +271,41 @@ void test_truncate_fp16() {
 
 // Test type promotion - based on test_dtype_spec.py:test_dtype_promo  
 void test_dtype_promotion() {
-    printf("Testing DType promotion...\n");
+    printf("Testing DType promotion with full lattice...\n");
     
-    // Python test cases from test_dtype_promo():
+    // Python test cases from test_dtype_promo() - these must match exactly:
+    
     // assert least_upper_dtype(dtypes.bool, dtypes.int8) == dtypes.int8
     DType result = least_upper_dtype(&dtypes.bool_, &dtypes.int8);
     ASSERT(dtype_eq(&result, &dtypes.int8));
+    
+    // assert least_upper_dtype(dtypes.int8, dtypes.uint8) == dtypes.int16
+    result = least_upper_dtype(&dtypes.int8, &dtypes.uint8);
+    ASSERT(dtype_eq(&result, &dtypes.int16));
+    
+    // assert least_upper_dtype(dtypes.uint8, dtypes.int16) == dtypes.int16
+    result = least_upper_dtype(&dtypes.uint8, &dtypes.int16);
+    ASSERT(dtype_eq(&result, &dtypes.int16));
+    
+    // assert least_upper_dtype(dtypes.int16, dtypes.uint16) == dtypes.int32
+    result = least_upper_dtype(&dtypes.int16, &dtypes.uint16);
+    ASSERT(dtype_eq(&result, &dtypes.int32));
+    
+    // assert least_upper_dtype(dtypes.uint16, dtypes.int32) == dtypes.int32
+    result = least_upper_dtype(&dtypes.uint16, &dtypes.int32);
+    ASSERT(dtype_eq(&result, &dtypes.int32));
+    
+    // assert least_upper_dtype(dtypes.int32, dtypes.uint32) == dtypes.int64
+    result = least_upper_dtype(&dtypes.int32, &dtypes.uint32);
+    ASSERT(dtype_eq(&result, &dtypes.int64));
+    
+    // assert least_upper_dtype(dtypes.uint32, dtypes.int64) == dtypes.int64
+    result = least_upper_dtype(&dtypes.uint32, &dtypes.int64);
+    ASSERT(dtype_eq(&result, &dtypes.int64));
+    
+    // assert least_upper_dtype(dtypes.int64, dtypes.uint64) == dtypes.float16
+    result = least_upper_dtype(&dtypes.int64, &dtypes.uint64);
+    ASSERT(dtype_eq(&result, &dtypes.float16));
     
     // assert least_upper_dtype(dtypes.float16, dtypes.float32) == dtypes.float32
     result = least_upper_dtype(&dtypes.float16, &dtypes.float32);
@@ -289,6 +318,22 @@ void test_dtype_promotion() {
     // assert least_upper_dtype(dtypes.bool, dtypes.float32) == dtypes.float32
     result = least_upper_dtype(&dtypes.bool_, &dtypes.float32);
     ASSERT(dtype_eq(&result, &dtypes.float32));
+    
+    // assert least_upper_dtype(dtypes.bool, dtypes.float64) == dtypes.float64
+    result = least_upper_dtype(&dtypes.bool_, &dtypes.float64);
+    ASSERT(dtype_eq(&result, &dtypes.float64));
+    
+    // assert least_upper_dtype(dtypes.float16, dtypes.int64) == dtypes.float16
+    result = least_upper_dtype(&dtypes.float16, &dtypes.int64);
+    ASSERT(dtype_eq(&result, &dtypes.float16));
+    
+    // assert least_upper_dtype(dtypes.float16, dtypes.uint64) == dtypes.float16
+    result = least_upper_dtype(&dtypes.float16, &dtypes.uint64);
+    ASSERT(dtype_eq(&result, &dtypes.float16));
+    
+    // assert least_upper_dtype(dtypes.fp8e4m3, dtypes.fp8e5m2) == dtypes.half
+    result = least_upper_dtype(&dtypes.fp8e4m3, &dtypes.fp8e5m2);
+    ASSERT(dtype_eq(&result, &dtypes.float16));
 }
 
 // Test sum accumulator dtype - based on test_dtype_alu.py:test_sum
@@ -338,10 +383,10 @@ void test_least_upper_float() {
     
     // Python: if input is int, should return default_float
     result = least_upper_float(&dtypes.int32);
-    ASSERT(dtype_eq(&result, &dtypes.default_float));
+    ASSERT(dtype_eq(&result, dtypes.default_float));
     
     result = least_upper_float(&dtypes.uint8);
-    ASSERT(dtype_eq(&result, &dtypes.default_float));
+    ASSERT(dtype_eq(&result, dtypes.default_float));
 }
 
 // Test aliases work correctly
@@ -403,6 +448,33 @@ int main() {
     test_least_upper_float();
     test_dtype_aliases();
     test_string_conversion();
+    
+    // Additional comprehensive tests for faithful port
+    printf("Testing comprehensive dtype features...\n");
+    
+    // Test ImageDType creation
+    int shape[] = {224, 224, 3};
+    ImageDType img_h = dtypes_imageh(shape, 3);
+    ASSERT(strcmp(img_h.ptr_base.base.name, "imageh") == 0);
+    ASSERT(img_h.ptr_base.size == 224 * 224 * 3);
+    ASSERT(dtypes_is_float((const DType*)&img_h.ptr_base.base));
+    
+    ImageDType img_f = dtypes_imagef(shape, 3);
+    ASSERT(strcmp(img_f.ptr_base.base.name, "imagef") == 0);
+    ASSERT(img_f.ptr_base.size == 224 * 224 * 3);
+    ASSERT(dtypes_is_float((const DType*)&img_f.ptr_base.base));
+    
+    // Test canonical names (DTYPES_DICT/INVERSE_DTYPES_DICT equivalent)
+    ASSERT(strcmp(dtype_canonical_name(&dtypes.int8), "int8") == 0);
+    ASSERT(strcmp(dtype_canonical_name(&dtypes.float32), "float32") == 0);
+    ASSERT(strcmp(dtype_canonical_name(&dtypes.bool_), "bool") == 0);
+    
+    // Test as_const with truncation
+    double truncated = dtypes_as_const_float(300.7, &dtypes.uint8);
+    ASSERT(truncated == 44.0); // 300 % 256 = 44
+    
+    truncated = dtypes_as_const_float(1.5, &dtypes.float16);
+    ASSERT(truncated == 1.5);
     
     // Cleanup
     dtypes_cleanup();

@@ -85,9 +85,9 @@ typedef struct dtypes_struct {
     DType int_;
     DType long_;
     
-    // Default types
-    DType default_float;
-    DType default_int;
+    // Default types (pointers to actual types)
+    const DType* default_float;
+    const DType* default_int;
     
     // Type collections
     const DType* fp8s[2];
@@ -105,6 +105,7 @@ DType dtype_new(int priority, int itemsize, const char* name, char fmt);
 
 // DType methods
 bool dtype_eq(const DType* a, const DType* b);
+bool dtype_same_instance(const DType* a, const DType* b); // pointer equality
 bool dtype_lt(const DType* a, const DType* b);
 DType dtype_vec(const DType* dt, int sz);
 PtrDType dtype_ptr(const DType* dt, int size, AddrSpace addrspace);
@@ -119,6 +120,8 @@ DType ptrdtype_vec(const PtrDType* dt, int sz);
 
 // ImageDType methods
 ImageDType imagedtype_create(const int* shape, int shape_len, bool is_half);
+ImageDType dtypes_imageh(const int* shape, int shape_len);
+ImageDType dtypes_imagef(const int* shape, int shape_len);
 
 // Type checking functions
 bool dtypes_is_float(const DType* dt);
@@ -143,10 +146,21 @@ double dtypes_max(const DType* dt);
 // FInfo function
 FInfo dtypes_finfo(const DType* dt);
 
-// Type promotion
+// Type promotion lattice entry
+typedef struct {
+    const DType* dtype;
+    const DType** promotions;
+    int promotion_count;
+} PromoLatticeEntry;
+
+// Type promotion functions
 DType least_upper_dtype(const DType* a, const DType* b);
 DType least_upper_dtype_multi(const DType** types, int count);
 DType least_upper_float(const DType* dt);
+
+// Internal promotion functions
+const DType** _get_recursive_parents(const DType* dtype, int* count);
+void _free_recursive_parents(const DType** parents);
 
 // Safe casting
 bool can_safe_cast(const DType* from, const DType* to);
@@ -168,6 +182,9 @@ double dtypes_truncate(double val, const DType* dt);
 // String conversion
 DType to_dtype(const char* name);
 const char* dtype_name(const DType* dt);
+
+// DTYPES_DICT equivalent - get canonical name for dtype
+const char* dtype_canonical_name(const DType* dt);
 
 // Initialization and cleanup
 void dtypes_init(void);
