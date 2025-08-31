@@ -73,7 +73,7 @@ reference/              # Original tinygrad Python source (for reference only)
 **Configure and build:**
 ```bash
 cmake -S . -B build -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON
-cmake --build build -j
+cmake --build build -j$(nproc)
 ````
 
 ---
