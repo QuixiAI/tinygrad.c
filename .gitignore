@@ -1,0 +1,178 @@
+# Build outputs
+build/
+out/
+dist/
+*.build/
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+*.bin
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+*.cmake
+!CMakeLists.txt
+
+# Testing
+test/build/
+test/output/
+*.test
+*.Test
+test_results/
+coverage/
+*.gcov
+*.gcda
+*.gcno
+.coverage
+
+# Python (for reference implementation)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+venv/
+env/
+.venv
+
+# IDE and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-*
+.project
+.cproject
+.settings/
+*.code-workspace
+
+# Documentation
+docs/build/
+docs/_build/
+doxygen/
+*.dox
+
+# Dependencies
+deps/
+vendor/
+third_party/
+external/
+
+# Generated files
+*.generated.c
+*.generated.h
+*_gen.c
+*_gen.h
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+*.backup
+*.orig
+
+# Core dumps
+core
+core.*
+vgcore.*
+
+# Profiling
+*.prof
+gmon.out
+callgrind.out.*
+perf.data
+perf.data.old
+
+# Model/data files
+*.ckpt
+*.pth
+*.h5
+*.pb
+*.onnx
+*.tflite
+*.caffemodel
+*.npy
+*.npz
+data/
+models/
+checkpoints/
+
+# CUDA
+*.i
+*.ii
+*.gpu
+*.ptx
+*.cubin
+*.fatbin
+
+# Metal
+*.metallib
+*.air
+
+# Valgrind
+*.memcheck
+*.valgrind
+
+# Cache
+.cache/
+*.cache
+
+# OS specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.Spotlight-V100
+.Trashes
+
+# Project specific
+reference/tinygrad/__pycache__/
+reference/tinygrad/**/__pycache__/
+reference/tinygrad/**/*.pyc
+*.weights
+*.dataset
+
+# Local configuration
+.env
+.env.local
+config.local.*
+
