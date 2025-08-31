@@ -6,15 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 tinygrad.c uses CMake with the following commands:
 
-**Configure and build:**
+**Quick build and test (recommended):**
+```bash
+./build.sh    # Configure and build project
+./test.sh     # Run all tests with detailed output
+```
+
+**Manual build (if needed):**
 ```bash
 cmake -S . -B build -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON
 cmake --build build -j
 ```
 
-**Run tests:**
+**Manual test commands:**
 ```bash
 # Run individual tests directly
+./build/test_dtype      # DType system tests (newly added)
 ./build/test_tensor
 ./build/test_ops  
 ./build/test_resnet18
