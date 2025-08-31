@@ -1,15 +1,25 @@
 /* helpers.c
- * Auto-generated unimplemented stub.
- * This file is a placeholder until helpers.h gets a real implementation.
- * Return TG_ERR_UNIMPL so callers fail loudly instead of silently succeeding.
+ * Minimal implementation of helper functions needed for dtype.c
  */
-#include "tg.h"
+#include <stdlib.h>
+#include <string.h>
 #include "helpers.h"
 
-int tg_unimpl_stub_helpers(void) {
-  return TG_ERR_UNIMPL;
+// Environment variable functions
+const char* tg_getenv(const char* name) {
+    return getenv(name);
 }
 
-/* NOTE:
- * Replace this file with a real implementation when porting tinygrad/helpers.py.
- */
+const char* tg_getenv_default(const char* name, const char* default_val) {
+    const char* val = getenv(name);
+    return val ? val : default_val;
+}
+
+// Product function for shapes
+int tg_prod(const int* shape, int len) {
+    int result = 1;
+    for (int i = 0; i < len; i++) {
+        result *= shape[i];
+    }
+    return result;
+}

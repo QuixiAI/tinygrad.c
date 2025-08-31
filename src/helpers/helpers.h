@@ -1,14 +1,16 @@
 #ifndef SRC_HELPERS_HELPERS_H
 #define SRC_HELPERS_HELPERS_H
-/* helpers.h
- * TODO: port from tinygrad/helpers.py to C.
- */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* TODO: public declarations */
+// Environment variable functions
+const char* tg_getenv(const char* name);
+const char* tg_getenv_default(const char* name, const char* default_val);
+
+// Product function for shapes
+int tg_prod(const int* shape, int len);
 
 #ifdef __cplusplus
 }
