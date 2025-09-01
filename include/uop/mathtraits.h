@@ -25,7 +25,7 @@ typedef struct MathTraitOps {
     UOp* (*ufix)(UOp* self, void* x);
     
     // Binary operation helper - equivalent to Python's _binop
-    UOp* (*binop)(UOp* self, Ops op, void* x, bool reverse);
+    UOp* (*binop)(UOp* self, Ops op, UOp* x, bool reverse);
     
     // Logical operations
     UOp* (*logical_not)(UOp* self);
@@ -35,36 +35,36 @@ typedef struct MathTraitOps {
     void (*check_dtype)(UOp* self);
     
     // Mathematical operations - direct ports of Python methods
-    UOp* (*add)(UOp* self, void* x, bool reverse);
-    UOp* (*mul)(UOp* self, void* x, bool reverse);
-    UOp* (*sub)(UOp* self, void* x, bool reverse);
-    UOp* (*div)(UOp* self, void* x, bool reverse);
-    UOp* (*idiv)(UOp* self, void* x, bool reverse);
-    UOp* (*mod)(UOp* self, void* x, bool reverse);
+    UOp* (*add)(UOp* self, UOp* x, bool reverse);
+    UOp* (*mul)(UOp* self, UOp* x, bool reverse);
+    UOp* (*sub)(UOp* self, UOp* x, bool reverse);
+    UOp* (*div)(UOp* self, UOp* x, bool reverse);
+    UOp* (*idiv)(UOp* self, UOp* x, bool reverse);
+    UOp* (*mod)(UOp* self, UOp* x, bool reverse);
     
     // Bitwise operations
-    UOp* (*bitwise_and)(UOp* self, void* x, bool reverse);
-    UOp* (*bitwise_or)(UOp* self, void* x, bool reverse);
-    UOp* (*bitwise_xor)(UOp* self, void* x, bool reverse);
+    UOp* (*bitwise_and)(UOp* self, UOp* x, bool reverse);
+    UOp* (*bitwise_or)(UOp* self, UOp* x, bool reverse);
+    UOp* (*bitwise_xor)(UOp* self, UOp* x, bool reverse);
     
     // Shift operations
-    UOp* (*lshift)(UOp* self, void* x, bool reverse);
-    UOp* (*rshift)(UOp* self, void* x, bool reverse);
+    UOp* (*lshift)(UOp* self, UOp* x, bool reverse);
+    UOp* (*rshift)(UOp* self, UOp* x, bool reverse);
     
     // Comparison operations
-    UOp* (*lt)(UOp* self, void* x);
-    UOp* (*gt)(UOp* self, void* x);
-    UOp* (*ge)(UOp* self, void* x);
-    UOp* (*le)(UOp* self, void* x);
-    UOp* (*ne)(UOp* self, void* x);
-    UOp* (*eq)(UOp* self, void* x);
+    UOp* (*lt)(UOp* self, UOp* x);
+    UOp* (*gt)(UOp* self, UOp* x);
+    UOp* (*ge)(UOp* self, UOp* x);
+    UOp* (*le)(UOp* self, UOp* x);
+    UOp* (*ne)(UOp* self, UOp* x);
+    UOp* (*eq)(UOp* self, UOp* x);
     
     // Min/max operations
-    UOp* (*maximum)(UOp* self, void* x);
-    UOp* (*minimum)(UOp* self, void* x);
+    UOp* (*maximum)(UOp* self, UOp* x);
+    UOp* (*minimum)(UOp* self, UOp* x);
     
     // Special operations
-    UOp* (*where)(UOp* self, void* x, void* y);
+    UOp* (*where)(UOp* self, UOp* x, UOp* y);
     UOp* (*threefry)(UOp* self, UOp* seed);
     
     // Unary math operations
@@ -73,7 +73,7 @@ typedef struct MathTraitOps {
     UOp* (*sin)(UOp* self);
     UOp* (*log2)(UOp* self);
     UOp* (*exp2)(UOp* self);
-    UOp* (*pow)(UOp* self, void* x);
+    UOp* (*pow)(UOp* self, UOp* x);
 } MathTraitOps;
 
 // Global MathTrait operations instance

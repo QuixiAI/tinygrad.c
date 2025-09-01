@@ -246,7 +246,41 @@ typedef struct UPat {
     };
     UPat** src;
     size_t src_count;
+    // Additional fields for pattern matching
+    bool strict_length;
+    int required_len;
+    const char* name;
+    void* dtype;  // Placeholder for dtype matching
 } UPat;
+
+// Pattern compilation error
+typedef struct {
+    int code;
+    const char* message;
+} UPatCompileError;
+
+// Pattern matcher structure
+typedef struct PatternMatcher PatternMatcher;
+typedef struct PatternMatch PatternMatch;
+
+typedef struct PatternMatch {
+    UPat* pattern;
+    void* (*callback)(void*, void*);  // Function pointer
+    void* user_data;
+} PatternMatch;
+
+typedef enum {
+    PM_OK = 0,
+    PM_COMPILE_ERROR,
+    PM_MATCH_ERROR
+} PatternMatcherResult;
+
+typedef struct PatternMatcher {
+    PatternMatch* matches;
+    size_t match_count;
+    size_t capacity;
+    bool compiled;
+} PatternMatcher;
 
 // Cache structures
 typedef struct UOpCacheEntry {
@@ -301,6 +335,18 @@ UOp* uop_cast(UOp* a, DType dtype);
 UOp* uop_where(UOp* cond, UOp* true_val, UOp* false_val);
 UOp* uop_mulacc(UOp* a, UOp* b, UOp* c);
 UOp* uop_reduce_axis(UOp* src, Ops reduce_op, int* axes, int axes_count);
+
+// Additional transcendental support functions
+UOp* uop_bitcast(UOp* a, DType dtype);
+UOp* uop_and(UOp* a, UOp* b);
+UOp* uop_or(UOp* a, UOp* b);
+UOp* uop_xor(UOp* a, UOp* b);
+UOp* uop_shl(UOp* a, UOp* b);
+UOp* uop_shr(UOp* a, UOp* b);
+UOp* uop_ge(UOp* a, UOp* b);
+UOp* uop_cmpne(UOp* a, UOp* b);
+UOp* uop_abs(UOp* a);
+UOp* uop_remainder(UOp* a, UOp* b);
 UOp* uop_view(UOp* buf, struct ShapeTracker* st);
 UOp* uop_index(UOp* buf, UOp* idx);
 UOp** uop_toposort(UOp* root, size_t* count);
@@ -325,6 +371,27 @@ UPat* upat_any(void);
 bool upat_match(UPat* pattern, UOp* uop);
 void upat_free(UPat* pat);
 
+// UPat compilation system
+PatternMatcher* pattern_matcher_new(PatternMatch* matches, size_t match_count, bool compiled);
+void pattern_matcher_free(PatternMatcher* pm);
+PatternMatcherResult pattern_matcher_apply(PatternMatcher* pm, UOp* root, void* ctx, void** result);
+
+// UPat compilation functions
+UPat* upat_create(void);
+void upat_free(UPat* pat);
+UOp* upat_get_clause(UPat* self, UOp* base, int depth);
+PatternMatcherResult upat_do_process_and(UOp* a, UOp** out_result);
+char* upat_final_render(UOp* x, bool has_ctx, int depth);
+char* upat_get_code(UPat* self, bool has_ctx);
+void* upat_compile(UPat* self, void* fxn);
+
+// Utility functions
+UOp** upat_partition(UOp** items, size_t count, bool (*pred)(UOp*), size_t* out_true);
+UOp** upat_dedup(UOp** items, size_t count, size_t* out_count);
+UOp* upat_graph_rewrite(UOp* root, PatternMatcher* pm, const char* name);
+UOp* upat_replace(UOp* uop, Ops new_op, UOp** new_src, size_t new_src_count);
+int upat_gep(UOp* uop, int index);
+
 // Cache management
 void uop_cache_init(void);
 void uop_cache_cleanup(void);
@@ -336,6 +403,47 @@ void uop_ops_cleanup(void);
 // Execution
 double exec_alu(Ops op, DType dtype, double* args, size_t arg_count);
 double identity_element(Ops op, DType* dtype);
+
+// Transcendental operations
+typedef enum {
+    TRANC_NONE = 0,
+    TRANC_SIN,
+    TRANC_LOG2,
+    TRANC_EXP2,
+    TRANC_POW
+} TranscendentalOp;
+
+// Pointer to transcendental function
+typedef UOp* (*TranscendentalFunc)(UOp* x, UOp* y);
+
+// Transcendental function prototypes
+UOp* transcendental_xsin(UOp* x, bool fast, float switch_over);
+UOp* transcendental_xexp2(UOp* x);
+UOp* transcendental_xlog2(UOp* x);
+UOp* transcendental_xpow(UOp* base, UOp* exponent);
+
+// Helper utility functions
+int transcendental_mantissa_bits(DType* d);
+int transcendental_exponent_bias(DType* d);
+int transcendental_exponent_mask(DType* d);
+
+// Integer division helpers
+typedef struct {
+    int magic;
+    int shift;
+    bool valid;
+} DivisionMagic;
+
+DivisionMagic transcendental_magicgu(int vmax, int d);
+UOp* transcendental_fast_idiv(const char* device, UOp* x, int d);
+
+// Symbolic simplification functions from symbolic.c
+UOp* symbolic_simplify(UOp* uop);
+UOp* symbolic_ssimplify(UOp* uop);
+
+// Variable creation and binding functions
+UOp* uop_create_variable(int min_val, int max_val);
+UOp* uop_bind(UOp* var, UOp* value);
 
 #ifdef __cplusplus
 }
