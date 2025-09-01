@@ -5,8 +5,8 @@
 #include <math.h>
 #include <stdint.h>
 #include "../include/tg.h"
-#include "../src/dtype/dtype.h"
-#include "../src/helpers/helpers.h"
+#include "dtype/dtype.h"
+#include "helpers/helpers.h"
 
 // Test counter
 static int tests_run = 0;

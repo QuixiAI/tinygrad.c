@@ -1,5 +1,5 @@
 #include "tg.h"
-#include "../tensor/tensor.h"
+#include "tensor/tensor.h"
 #include <stdlib.h>
 
 struct tg_sgd { float lr, momentum, weight_decay; };

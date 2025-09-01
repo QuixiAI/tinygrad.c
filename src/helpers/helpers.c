@@ -3,7 +3,7 @@
  */
 #include <stdlib.h>
 #include <string.h>
-#include "helpers.h"
+#include "helpers/helpers.h"
 
 // Environment variable functions
 const char* tg_getenv(const char* name) {

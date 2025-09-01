@@ -1,6 +1,6 @@
 #include <math.h>
 #include "tg.h"
-#include "../tensor/tensor.h"
+#include "tensor/tensor.h"
 
 int tgGraphCreate(tg_ctx_t ctx, tg_graph_t *out){ if(!out||!ctx) return TG_ERR_INVALID; *out=(tg_graph_t)ctx; return TG_SUCCESS; }
 int tgGraphRun(tg_graph_t g){ (void)g; return TG_SUCCESS; }

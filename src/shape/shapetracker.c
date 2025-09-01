@@ -4,7 +4,7 @@
  * Return TG_ERR_UNIMPL so callers fail loudly instead of silently succeeding.
  */
 #include "tg.h"
-#include "shapetracker.h"
+#include "shape/shapetracker.h"
 
 int tg_unimpl_stub_shapetracker(void) {
   return TG_ERR_UNIMPL;

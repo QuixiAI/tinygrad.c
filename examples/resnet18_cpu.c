@@ -1,5 +1,5 @@
 #include "tg.h"
-#include "../src/tensor/tensor.h"   // temporary: to touch internals for demo
+#include "tensor/tensor.h"   // temporary: to touch internals for demo
 #include <stdio.h>
 #include <stdlib.h>
 

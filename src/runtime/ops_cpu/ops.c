@@ -1,7 +1,7 @@
 #include <math.h>
 #include <string.h>
 #include "tg.h"
-#include "../../tensor/tensor.h"
+#include "tensor/tensor.h"
 
 /* Utility to check compatible shapes quickly (no broadcasting) */
 static int same_shape(const struct tg_tensor *a, const struct tg_tensor *b){

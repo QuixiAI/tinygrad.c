@@ -2,7 +2,7 @@
 #include <string.h>
 #include <assert.h>
 #include "tg.h"
-#include "tensor.h"
+#include "tensor/tensor.h"
 
 int tg__calc_numel(const int64_t *shape, int rank, size_t *out){
   if(!shape||rank<=0) return TG_ERR_INVALID;

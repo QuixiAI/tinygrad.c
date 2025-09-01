@@ -4,7 +4,7 @@
  * Return TG_ERR_UNIMPL so callers fail loudly instead of silently succeeding.
  */
 #include "tg.h"
-#include "view.h"
+#include "shape/view.h"
 
 int tg_unimpl_stub_view(void) {
   return TG_ERR_UNIMPL;

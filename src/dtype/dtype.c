@@ -13,8 +13,8 @@
 #include <assert.h>
 #include <ctype.h>
 
-#include "dtype.h"
-#include "../helpers/helpers.h"
+#include "dtype/dtype.h"
+#include "helpers/helpers.h"
 
 // DType cache for singleton pattern (like Python metaclass)
 #define DTYPE_CACHE_SIZE 256
