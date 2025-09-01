@@ -356,6 +356,8 @@ size_t uop_hash(UOp* uop);
 bool uop_equals(UOp* a, UOp* b);
 UOp* uop_simplify(UOp* uop);
 UOp* uop_ssimplify(UOp* uop);
+int uop_vmin(UOp* uop);
+int uop_vmax(UOp* uop);
 int uop_sym_infer(UOp* uop);
 bool uop_resolve(UOp* uop, bool default_val);
 UOp* uop_cache_get(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void* tag);
