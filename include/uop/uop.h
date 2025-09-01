@@ -347,13 +347,18 @@ UOp* uop_ge(UOp* a, UOp* b);
 UOp* uop_cmpne(UOp* a, UOp* b);
 UOp* uop_abs(UOp* a);
 UOp* uop_remainder(UOp* a, UOp* b);
+UOp* uop_mod(UOp* a, UOp* b);
+UOp* uop_gt(UOp* a, UOp* b);
 UOp* uop_view(UOp* buf, struct ShapeTracker* st);
 UOp* uop_index(UOp* buf, UOp* idx);
+UOp* uop_var(const char* name, DType dtype);
+UOp* uop_var_with_range(const char* name, DType dtype, int min_val, int max_val);
+UOp* uop_buffer(int64_t* shape, size_t shape_count, DType dtype);
+UOp* uop_reduce(UOp* src, Ops reduce_op);
 UOp** uop_toposort(UOp* root, size_t* count);
 void uop_print(UOp* uop, int depth);
 void uop_print_graph(UOp* root);
 size_t uop_hash(UOp* uop);
-bool uop_equals(UOp* a, UOp* b);
 UOp* uop_simplify(UOp* uop);
 UOp* uop_ssimplify(UOp* uop);
 int uop_vmin(UOp* uop);
@@ -399,6 +404,7 @@ void uop_cache_init(void);
 void uop_cache_cleanup(void);
 
 // Module initialization
+void uop_init(void);
 void uop_ops_init(void);
 void uop_ops_cleanup(void);
 

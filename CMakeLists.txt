@@ -180,4 +180,5 @@ if(BUILD_TESTS)
   add_test(NAME test_resnet18 COMMAND test_resnet18)
   add_test(NAME test_dtype    COMMAND test_dtype)
   add_test(NAME test_uop      COMMAND test_uop)
+  
 endif()

@@ -1339,5 +1339,50 @@ void uop_ops_cleanup(void) {
     mathtraits_cleanup();
 }
 
+// Additional stub functions for testing
+UOp* uop_var(const char* name, DType dtype) {
+    // Create a variable UOp (placeholder implementation)
+    UOpArg arg = {0};
+    arg.type = ARG_NONE;
+    return uop_new(OPS_DEFINE_VAR, dtype, NULL, 0, &arg, NULL);
+}
+
+UOp* uop_var_with_range(const char* name, DType dtype, int min_val, int max_val) {
+    // Create a variable with range constraints
+    UOpArg arg = {0};
+    arg.type = ARG_INT;
+    arg.int_data.i = min_val;  // Simplified: just store min for now
+    return uop_new(OPS_DEFINE_VAR, dtype, NULL, 0, &arg, NULL);
+}
+
+UOp* uop_buffer(int64_t* shape, size_t shape_count, DType dtype) {
+    // Create a buffer UOp
+    UOpArg arg = {0};
+    arg.type = ARG_NONE;
+    return uop_new(OPS_BUFFER, dtype, NULL, 0, &arg, NULL);
+}
+
+UOp* uop_reduce(UOp* src, Ops reduce_op) {
+    // Create a reduce operation
+    UOpArg arg = {0};
+    arg.type = ARG_REDUCE;
+    arg.reduce_data.reduce_op = reduce_op;
+    arg.reduce_data.axes = NULL;
+    arg.reduce_data.axes_count = 0;
+    return uop_new(OPS_REDUCE, src->dtype, &src, 1, &arg, NULL);
+}
+
+UOp* uop_mod(UOp* a, UOp* b) {
+    // Modulo operation
+    return uop_new(OPS_MOD, a->dtype, (UOp*[]){a, b}, 2, NULL, NULL);
+}
+
+UOp* uop_gt(UOp* a, UOp* b) {
+    // Greater than comparison
+    // GT(a, b) is equivalent to LT(b, a)
+    return uop_lt(b, a);
+}
+
+
 // Line 978: End of file
 /* ops.c - Faithful port of tinygrad/uop/ops.py complete */

@@ -1743,15 +1743,15 @@ static void test_uop_str_repr(void) {
     // Test string representation like test_uops.py TestUOpStr
     UOp* x = uop_const(dtypes.float32, 3.14);
     
-    // Should produce readable string
-    uop_print(x, 0);  // This is a stub that does nothing currently
+    // Tests should be silent on success - don't call uop_print
+    // Just verify the objects are created correctly
+    ASSERT(x != NULL);
     
     // Test vectorized string repr - using vec3i to store vector values
     UOpArg vec_arg = {0};
     vec_arg.type = ARG_INT;
     // Note: This test expects a vec3i interface that's not in our structure
     UOp* vec = uop_new(OPS_VCONST, dtypes.float32, NULL, 0, &vec_arg, NULL);
-    uop_print(vec, 0);
     
     ASSERT(vec != NULL);
 }
