@@ -672,7 +672,19 @@ void test_transcendental_mathematical_accuracy() {
             // Compare against math library (convert float64 to float32 for comparison)
             double expected = pow(2.0, x);
             double result = exec_alu(OPS_EXP2, dtypes.float32, &x, 1);
-            ASSERT_NEAR(result, expected, 0.001 * fabs(expected));  // Relative tolerance
+            // Skip overflow cases - if x is too large, result should be inf
+            if (x > 127.0) {  // 2^128 is beyond float32 range
+                if (isinf(result) && result > 0) {
+                    continue;  // Correct overflow behavior
+                }
+            }
+            // Skip overflow cases (both should be inf)
+            if (isinf(expected) && isinf(result)) {
+                continue;
+            }
+            // Use absolute tolerance for values near zero, relative otherwise
+            double tolerance = fmax(0.001 * fabs(expected), 1e-6);
+            ASSERT_NEAR(result, expected, tolerance);
         }
         
         // Test LOG2
@@ -2587,11 +2599,11 @@ int main() {
     printf("Tests failed: %d\n", tests_failed);
     printf("Test coverage: %.1f%% (estimated)\n", (double)tests_run / 600.0 * 100.0);
     
-    if (tests_failed == tests_run) {
-        printf("\nSUCCESS: All tests failed as expected (TDD - implementation not done)\n");
+    if (tests_failed == 0) {
+        printf("\nSUCCESS: All tests passed!\n");
         return 0;
     } else {
-        printf("\nWARNING: Some tests passed unexpectedly\n");
+        printf("\nFAILURE: %d tests failed\n", tests_failed);
         return 1;
     }
 }
