@@ -7,10 +7,14 @@
 #include <assert.h>
 #include <math.h>
 
-#include "uop/ops.h"
-#include "uop/uop.h"
-#include "uop/mathtraits.h"
-#include "dtype/dtype.h"
+#include "../include/uop/uop.h"
+#include "mathtraits.h"  // This provides the math_ops symbol
+
+// Forward declaration for ShapeTracker
+typedef struct ShapeTracker {
+    int shape[8];
+    int ndim;
+} ShapeTracker;
 
 // Line 1-10: imports
 // from __future__ import annotations
@@ -29,18 +33,6 @@
 // Line 19-22: Global caching variables
 // _cache: dict[tuple, UOp] = {}
 // _match_stats:dict[UPat, tuple[int, int]] = {}
-typedef struct UOpCacheEntry {
-    size_t key_hash;
-    UOp* value;
-    struct UOpCacheEntry* next;
-} UOpCacheEntry;
-
-typedef struct {
-    UOpCacheEntry** buckets;
-    size_t bucket_count;
-    size_t size;
-} UOpCacheTable;
-
 static UOpCacheTable* _cache = NULL;
 static int _match_stats_hits = 0;
 static int _match_stats_total = 0;
@@ -64,33 +56,11 @@ UOp* uop_new(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void
     }
     
     // Line 46-47: Handle SINK with single src
-    // In Python: if self.op is Ops.SINK and len(self.src) == 1 and self.src[0].op is Ops.STORE: return self.src[0]  
-    // But for tests, we need to create the SINK properly first
+    // In Python: if self.op is Ops.SINK and len(self.src) == 1 and self.src[0].op is Ops.STORE: return self.src[0]
     // This optimization should return the existing STORE, not create a new one
-    // Commenting out for now to pass tests
-    #if 0
     if (op == OPS_SINK && src_count == 1 && src[0]->op == OPS_STORE) {
         return src[0];  // Return the STORE directly
     }
-    #endif
-    
-    // Line 48-58: Cache lookup - DISABLED for now to avoid memory issues
-    // The Python version uses weak references, we need a more sophisticated approach
-    #if 0
-    size_t key_hash = op;
-    key_hash = key_hash * 31 + (dtype.count ? (size_t)dtype._scalar : 0);
-    for (size_t i = 0; i < src_count; i++) {
-        key_hash = key_hash * 31 + (size_t)src[i];
-    }
-    if (arg) {
-        // Hash arg based on type
-        if (arg->type == ARG_CONST) {
-            key_hash = key_hash * 31 + (size_t)(arg->const_value * 1000000);
-        } else if (arg->type == ARG_INT) {
-            key_hash = key_hash * 31 + (size_t)arg->i;
-        }
-    }
-    #endif
     
     // Line 59-60: Create new UOp
     UOp* uop = (UOp*)calloc(1, sizeof(UOp));
@@ -111,23 +81,8 @@ UOp* uop_new(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void
     uop->math_ops = &math_ops;
     uop->ref_count = 1;  // Start with ref count 1
     
-    // Add to cache - DISABLED for now
-    #if 0
-    if (!_cache) {
-        _cache = (UOpCacheTable*)calloc(1, sizeof(UOpCacheTable));
-        _cache->bucket_count = 1024;
-        _cache->buckets = (UOpCacheEntry**)calloc(_cache->bucket_count, sizeof(UOpCacheEntry*));
-    }
-    
-    size_t bucket_idx = key_hash % _cache->bucket_count;
-    UOpCacheEntry* new_entry = (UOpCacheEntry*)malloc(sizeof(UOpCacheEntry));
-    new_entry->key_hash = key_hash;
-    new_entry->value = uop;
-    new_entry->next = _cache->buckets[bucket_idx];
-    _cache->buckets[bucket_idx] = new_entry;
-    _cache->size++;
-    #endif
-    
+    // Add to cache
+    uop_cache_put(uop);
     return uop;
 }
 
@@ -165,7 +120,7 @@ bool uop_commutative(UOp* uop) {
 // Line 74-80: def is_zero(self) -> bool:
 bool uop_is_zero(UOp* uop) {
     if (uop->op == OPS_CONST && uop->arg.type == ARG_CONST) {
-        return uop->arg.const_value == 0.0;
+        return uop->arg.const_data.const_value == 0.0;
     }
     if (uop->op == OPS_VECTORIZE) {
         for (size_t i = 0; i < uop->src_count; i++) {
@@ -179,7 +134,7 @@ bool uop_is_zero(UOp* uop) {
 // Line 82-88: def is_one(self) -> bool:
 bool uop_is_one(UOp* uop) {
     if (uop->op == OPS_CONST && uop->arg.type == ARG_CONST) {
-        return uop->arg.const_value == 1.0;
+        return uop->arg.const_data.const_value == 1.0;
     }
     if (uop->op == OPS_VECTORIZE) {
         for (size_t i = 0; i < uop->src_count; i++) {
@@ -193,20 +148,51 @@ bool uop_is_one(UOp* uop) {
 // Line 90-100: def divides(self, v) -> Optional[int]:
 int uop_divides(UOp* uop, int v) {
     if (uop->op == OPS_CONST && uop->arg.type == ARG_INT) {
-        int val = uop->arg.i;
+        int val = uop->arg.int_data.i;
         if (val != 0 && v % val == 0) {
             return v / val;
         }
     }
     if (uop->op == OPS_MUL && uop->src_count == 2) {
         if (uop->src[0]->op == OPS_CONST && uop->src[0]->arg.type == ARG_INT) {
-            int val = uop->src[0]->arg.i;
+            int val = uop->src[0]->arg.int_data.i;
             if (val != 0 && v % val == 0) {
                 return uop_divides(uop->src[1], v / val);
             }
         }
     }
     return 0;  // None in Python
+}
+
+// Missing operation implementations for MathTrait support
+UOp* uop_and(UOp* a, UOp* b) {
+    UOp* src[] = {a, b};
+    UOpArg arg = {0};
+    return uop_new(OPS_AND, dtypes.bool_, src, 2, &arg, NULL);
+}
+
+UOp* uop_or(UOp* a, UOp* b) {
+    UOp* src[] = {a, b};
+    UOpArg arg = {0};
+    return uop_new(OPS_OR, dtypes.bool_, src, 2, &arg, NULL);
+}
+
+UOp* uop_xor(UOp* a, UOp* b) {
+    UOp* src[] = {a, b};
+    UOpArg arg = {0};
+    return uop_new(OPS_XOR, dtypes.bool_, src, 2, &arg, NULL);
+}
+
+UOp* uop_shl(UOp* a, UOp* b) {
+    UOp* src[] = {a, b};
+    UOpArg arg = {0};
+    return uop_new(OPS_SHL, dtypes.bool_, src, 2, &arg, NULL);
+}
+
+UOp* uop_shr(UOp* a, UOp* b) {
+    UOp* src[] = {a, b};
+    UOpArg arg = {0};
+    return uop_new(OPS_SHR, dtypes.bool_, src, 2, &arg, NULL);
 }
 
 // Line 102-140: Various helper methods
@@ -233,17 +219,17 @@ UOp* uop_load(UOp* buf, DType dtype) {
 
 // Line 142-145: def const(self, dtype, val):
 UOp* uop_const(DType dtype, double value) {
-    UOpArg arg = {.type = ARG_CONST, .const_value = value};
+    UOpArg arg = {.type = ARG_CONST, .const_data.const_value = value};
     return uop_new(OPS_CONST, dtype, NULL, 0, &arg, NULL);
 }
 
 UOp* uop_define_global(DType dtype, int idx) {
-    UOpArg arg = {.type = ARG_INT, .i = idx};
+    UOpArg arg = {.type = ARG_INT, .int_data.i = idx};
     return uop_new(OPS_DEFINE_GLOBAL, dtype, NULL, 0, &arg, NULL);
 }
 
 UOp* uop_define_local(DType dtype, size_t size) {
-    UOpArg arg = {.type = ARG_INT, .i = (int)size};
+    UOpArg arg = {.type = ARG_INT, .int_data.i = (int)size};
     return uop_new(OPS_DEFINE_LOCAL, dtype, NULL, 0, &arg, NULL);
 }
 
@@ -375,10 +361,10 @@ UOp* uop_reduce_axis(UOp* src, Ops reduce_op, int* axes, int axes_count) {
     
     // Create reduction arg
     UOpArg arg = {.type = ARG_REDUCE};
-    arg.reduce_arg.reduce_op = reduce_op;
-    arg.reduce_arg.axes = (int*)malloc(axes_count * sizeof(int));
-    memcpy(arg.reduce_arg.axes, axes, axes_count * sizeof(int));
-    arg.reduce_arg.axes_count = axes_count;
+    arg.reduce_data.reduce_op = reduce_op;
+    arg.reduce_data.axes = (int*)malloc(axes_count * sizeof(int));
+    memcpy(arg.reduce_data.axes, axes, axes_count * sizeof(int));
+    arg.reduce_data.axes_count = axes_count;
     
     // Determine result dtype based on reduce_op
     DType result_dtype = src->dtype;
@@ -387,14 +373,14 @@ UOp* uop_reduce_axis(UOp* src, Ops reduce_op, int* axes, int axes_count) {
     }
     
     UOp* result = uop_new(OPS_REDUCE_AXIS, result_dtype, src_arr, 1, &arg, NULL);
-    free(arg.reduce_arg.axes);  // The uop_new function will copy the data
+    free(arg.reduce_data.axes);  // The uop_new function will copy the data
     return result;
 }
 
 // Line 282-300: View operations
 UOp* uop_view(UOp* buf, ShapeTracker* st) {
     UOp* src[] = {buf};
-    UOpArg arg = {.type = ARG_SHAPE_TRACKER, .st = st};
+    UOpArg arg = {.type = ARG_SHAPE_TRACKER, .st_data.st = st};
     return uop_new(OPS_VIEW, buf->dtype, src, 1, &arg, NULL);
 }
 
@@ -404,61 +390,62 @@ UOp* uop_index(UOp* buf, UOp* idx) {
     return uop_new(OPS_INDEX, buf->dtype, src, 2, &arg, NULL);
 }
 
+// Helper function for topological sort
+static void add_node(UOp*** nodes, size_t* size, size_t* capacity, UOp* node) {
+    if (*size >= *capacity) {
+        *capacity = *capacity ? *capacity * 2 : 16;
+        *nodes = (UOp**)realloc(*nodes, *capacity * sizeof(UOp*));
+    }
+    (*nodes)[(*size)++] = node;
+}
+
+// Check if node is in list
+static bool contains(UOp** nodes, size_t size, UOp* node) {
+    for (size_t i = 0; i < size; i++) {
+        if (nodes[i] == node) return true;
+    }
+    return false;
+}
+
 // Line 302-400: Graph operations
+struct TopoSortState {
+    UOp** visited;
+    size_t visited_size;
+    size_t visited_capacity;
+    UOp** stack;
+    size_t stack_size;
+    size_t stack_capacity;
+};
+
+static void dfs_internal(UOp* node, struct TopoSortState* state) {
+    if (contains(state->visited, state->visited_size, node)) return;
+    add_node(&state->visited, &state->visited_size, &state->visited_capacity, node);
+    
+    for (size_t i = 0; i < node->src_count; i++) {
+        dfs_internal(node->src[i], state);
+    }
+    
+    add_node(&state->stack, &state->stack_size, &state->stack_capacity, node);
+}
+
 // Line 302: def toposort(self) -> list[UOp]:
 UOp** uop_toposort(UOp* root, size_t* count) {
     // Simple DFS-based topological sort
-    typedef struct {
-        UOp** nodes;
-        size_t size;
-        size_t capacity;
-    } NodeList;
+    struct TopoSortState state = {NULL, 0, 0, NULL, 0, 0};
     
-    NodeList visited = {NULL, 0, 0};
-    NodeList stack = {NULL, 0, 0};
+    dfs_internal(root, &state);
     
-    // Helper function to add to list
-    void add_node(NodeList* list, UOp* node) {
-        if (list->size >= list->capacity) {
-            list->capacity = list->capacity ? list->capacity * 2 : 16;
-            list->nodes = (UOp**)realloc(list->nodes, list->capacity * sizeof(UOp*));
-        }
-        list->nodes[list->size++] = node;
-    }
-    
-    // Check if node is in list
-    bool contains(NodeList* list, UOp* node) {
-        for (size_t i = 0; i < list->size; i++) {
-            if (list->nodes[i] == node) return true;
-        }
-        return false;
-    }
-    
-    // DFS function
-    void dfs(UOp* node) {
-        if (contains(&visited, node)) return;
-        add_node(&visited, node);
-        
-        for (size_t i = 0; i < node->src_count; i++) {
-            dfs(node->src[i]);
-        }
-        
-        add_node(&stack, node);
-    }
-    
-    dfs(root);
-    
-    if (count) *count = stack.size;
+    if (count) *count = state.stack_size;
     
     // Reverse the stack to get correct topological order
-    for (size_t i = 0; i < stack.size / 2; i++) {
-        UOp* temp = stack.nodes[i];
-        stack.nodes[i] = stack.nodes[stack.size - 1 - i];
-        stack.nodes[stack.size - 1 - i] = temp;
+    for (size_t i = 0; i < state.stack_size / 2; i++) {
+        UOp* temp = state.stack[i];
+        state.stack[i] = state.stack[state.stack_size - 1 - i];
+        state.stack[state.stack_size - 1 - i] = temp;
     }
     
-    free(visited.nodes);
-    return stack.nodes;
+    free(state.visited);
+    return state.stack;
 }
 
 // Line 340-360: def print(self, depth=0):
@@ -480,9 +467,9 @@ void uop_print(UOp* uop, int depth) {
     // Print arg if present
     if (uop->arg.type != ARG_NONE) {
         if (uop->arg.type == ARG_CONST) {
-            printf(", %.2f", uop->arg.const_value);
+            printf(", %.2f", uop->arg.const_data.const_value);
         } else if (uop->arg.type == ARG_INT) {
-            printf(", %d", uop->arg.i);
+            printf(", %d", uop->arg.int_data.i);
         }
     }
     
@@ -514,9 +501,9 @@ size_t uop_hash(UOp* uop) {
     
     // Hash arg
     if (uop->arg.type == ARG_CONST) {
-        hash = hash * 31 + (size_t)(uop->arg.const_value * 1000000);
+        hash = hash * 31 + (size_t)(uop->arg.const_data.const_value * 1000000);
     } else if (uop->arg.type == ARG_INT) {
-        hash = hash * 31 + (size_t)uop->arg.i;
+        hash = hash * 31 + (size_t)uop->arg.int_data.i;
     }
     
     return hash;
@@ -538,8 +525,8 @@ bool uop_equals(UOp* a, UOp* b) {
     
     // Compare args
     if (a->arg.type != b->arg.type) return false;
-    if (a->arg.type == ARG_CONST && a->arg.const_value != b->arg.const_value) return false;
-    if (a->arg.type == ARG_INT && a->arg.i != b->arg.i) return false;
+    if (a->arg.type == ARG_CONST && a->arg.const_data.const_value != b->arg.const_data.const_value) return false;
+    if (a->arg.type == ARG_INT && a->arg.int_data.i != b->arg.int_data.i) return false;
     
     return true;
 }
@@ -590,7 +577,7 @@ int uop_sym_infer(UOp* uop) {
     if (!uop) return 0;
     
     if (uop->op == OPS_CONST && uop->arg.type == ARG_INT) {
-        return uop->arg.i;
+        return uop->arg.int_data.i;
     }
     
     // More symbolic inference rules would be added here
@@ -603,7 +590,7 @@ bool uop_resolve(UOp* uop, bool default_val) {
     if (!uop) return default_val;
     
     if (uop->op == OPS_CONST && uop->dtype._scalar == dtypes.bool_._scalar) {
-        return uop->arg.const_value != 0.0;
+        return uop->arg.const_data.const_value != 0.0;
     }
     
     // More resolution rules would be added here
@@ -642,31 +629,40 @@ UOp* uop_cache_get(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg
     // Compute hash
     size_t hash = op;
     hash = hash * 31 + (dtype.count ? (size_t)dtype._scalar : 0);
+    // Instead of using pointer addresses, use source UOp properties for deterministic caching
     for (size_t i = 0; i < src_count; i++) {
-        hash = hash * 31 + (size_t)src[i];
+        if (src[i]) {
+            hash = hash * 31 + src[i]->op;
+            hash = hash * 31 + (src[i]->dtype.count ? (size_t)src[i]->dtype._scalar : 0);
+        } else {
+            hash = hash * 31 + 0;  // NULL source
+        }
     }
     if (arg) {
         if (arg->type == ARG_CONST) {
-            hash = hash * 31 + (size_t)(arg->const_value * 1000000);
+            hash = hash * 31 + (size_t)(arg->const_data.const_value * 1000000);
         } else if (arg->type == ARG_INT) {
-            hash = hash * 31 + (size_t)arg->i;
+            hash = hash * 31 + (size_t)arg->int_data.i;
         }
     }
     
     // Lookup in cache
     size_t bucket_idx = hash % _cache->bucket_count;
+    
     UOpCacheEntry* entry = _cache->buckets[bucket_idx];
     while (entry) {
         if (entry->key_hash == hash && entry->value) {
             UOp* cached = entry->value;
-            if (cached->op == op && 
+            if (cached->op == op &&
                 cached->dtype._scalar == dtype._scalar &&
                 cached->src_count == src_count) {
                 bool match = true;
                 for (size_t i = 0; i < src_count && match; i++) {
                     if (cached->src[i] != src[i]) match = false;
                 }
-                if (match) return cached;
+                if (match) {
+                    return cached;
+                }
             }
         }
         entry = entry->next;
@@ -676,8 +672,35 @@ UOp* uop_cache_get(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg
 }
 
 void uop_cache_put(UOp* uop) {
-    // Cache is managed automatically in uop_new
-    (void)uop;
+    if (!uop || !_cache) return;
+    
+    // Compute hash using the same logic as uop_cache_get
+    size_t hash = uop->op;
+    hash = hash * 31 + (uop->dtype.count ? (size_t)uop->dtype._scalar : 0);
+    // Instead of using pointer addresses, use source UOp properties for deterministic caching
+    for (size_t i = 0; i < uop->src_count; i++) {
+        if (uop->src[i]) {
+            hash = hash * 31 + uop->src[i]->op;
+            hash = hash * 31 + (uop->src[i]->dtype.count ? (size_t)uop->src[i]->dtype._scalar : 0);
+        } else {
+            hash = hash * 31 + 0;  // NULL source
+        }
+    }
+    if (uop->arg.type == ARG_CONST) {
+        hash = hash * 31 + (size_t)(uop->arg.const_data.const_value * 1000000);
+    } else if (uop->arg.type == ARG_INT) {
+        hash = hash * 31 + (size_t)uop->arg.int_data.i;
+    }
+    
+    // Add to cache
+    size_t bucket_idx = hash % _cache->bucket_count;
+    
+    UOpCacheEntry* new_entry = (UOpCacheEntry*)malloc(sizeof(UOpCacheEntry));
+    new_entry->key_hash = hash;
+    new_entry->value = uop_ref(uop);  // Reference the cached UOp
+    new_entry->next = _cache->buckets[bucket_idx];
+    _cache->buckets[bucket_idx] = new_entry;
+    _cache->size++;
 }
 
 // Line 682-800: Pattern matching support (UPat class)
@@ -691,7 +714,7 @@ void uop_cache_put(UOp* uop) {
 UPat* upat_op(Ops op, UPat** src, size_t src_count) {
     UPat* pat = (UPat*)calloc(1, sizeof(UPat));
     pat->type = UPAT_OP;
-    pat->value.op = op;
+    pat->op_data.op = op;
     if (src_count > 0) {
         pat->src = (UPat**)malloc(src_count * sizeof(UPat*));
         memcpy(pat->src, src, src_count * sizeof(UPat*));
@@ -703,14 +726,14 @@ UPat* upat_op(Ops op, UPat** src, size_t src_count) {
 UPat* upat_var(int id) {
     UPat* pat = (UPat*)calloc(1, sizeof(UPat));
     pat->type = UPAT_VAR;
-    pat->value.var_id = id;
+    pat->var_data.var_id = id;
     return pat;
 }
 
 UPat* upat_const(double val) {
     UPat* pat = (UPat*)calloc(1, sizeof(UPat));
     pat->type = UPAT_CONST;
-    pat->value.const_val = val;
+    pat->const_data.const_val = val;
     return pat;
 }
 
@@ -742,7 +765,7 @@ static bool match_internal(UPat* pattern, UOp* uop, BindingList* bindings) {
         case UPAT_VAR:
             // Check if already bound
             for (size_t i = 0; i < bindings->count; i++) {
-                if (bindings->bindings[i].var_id == pattern->value.var_id) {
+                if (bindings->bindings[i].var_id == pattern->var_data.var_id) {
                     return bindings->bindings[i].value == uop;
                 }
             }
@@ -752,7 +775,7 @@ static bool match_internal(UPat* pattern, UOp* uop, BindingList* bindings) {
                 bindings->bindings = (Binding*)realloc(bindings->bindings, 
                                                        bindings->capacity * sizeof(Binding));
             }
-            bindings->bindings[bindings->count].var_id = pattern->value.var_id;
+            bindings->bindings[bindings->count].var_id = pattern->var_data.var_id;
             bindings->bindings[bindings->count].value = uop;
             bindings->count++;
             return true;
@@ -760,10 +783,10 @@ static bool match_internal(UPat* pattern, UOp* uop, BindingList* bindings) {
         case UPAT_CONST:
             if (uop->op != OPS_CONST) return false;
             if (uop->arg.type != ARG_CONST) return false;
-            return uop->arg.const_value == pattern->value.const_val;
+            return uop->arg.const_data.const_value == pattern->const_data.const_val;
             
         case UPAT_OP:
-            if (uop->op != pattern->value.op) return false;
+            if (uop->op != pattern->op_data.op) return false;
             if (pattern->src_count != uop->src_count) return false;
             for (size_t i = 0; i < pattern->src_count; i++) {
                 if (!match_internal(pattern->src[i], uop->src[i], bindings)) {

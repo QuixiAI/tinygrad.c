@@ -3,6 +3,15 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
+
+// Forward declarations for other headers
+#include "dtype/dtype.h"
+
+// Forward declarations
+typedef struct ShapeTracker ShapeTracker;
+typedef struct UPat UPat;
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -142,6 +151,35 @@ typedef enum {
     OPS_MAX_VALUE  // sentinel for max value
 } Ops;
 
+// UOp argument types
+typedef enum {
+    ARG_NONE = 0,
+    ARG_CONST,
+    ARG_INT,
+    ARG_REDUCE,
+    ARG_SHAPE_TRACKER
+} UOpArgType;
+
+typedef struct UOpArg {
+    UOpArgType type;
+    union {
+        struct {
+            double const_value;
+        } const_data;
+        struct {
+            int i;
+        } int_data;
+        struct {
+            Ops reduce_op;
+            int* axes;
+            int axes_count;
+        } reduce_data;
+        struct {
+            void* st;  // ShapeTracker*
+        } st_data;
+    };
+} UOpArg;
+
 // GroupOp collections - mirrors Python GroupOp class
 typedef struct {
     bool is_unary[OPS_MAX_VALUE];
@@ -164,14 +202,140 @@ typedef struct {
 // Global GroupOp instance
 extern const GroupOp group_op;
 
+// UOp structure - mirrors Python UOp class
+typedef struct UOp UOp;
+typedef struct UOpCacheEntry UOpCacheEntry;
+
+// Forward declaration for MathTraitOps
+typedef struct MathTraitOps MathTraitOps;
+
+// Include mathtraits after forward declarations
+#include "mathtraits.h"
+
+typedef struct UOp {
+    Ops op;
+    DType dtype;
+    UOp** src;
+    size_t src_count;
+    UOpArg arg;
+    const MathTraitOps* math_ops;
+    int ref_count;
+} UOp;
+
+// Pattern matching structures
+typedef enum {
+    UPAT_ANY,
+    UPAT_VAR,
+    UPAT_CONST,
+    UPAT_OP,
+    UPAT_DTYPE
+} UPatType;
+
+typedef struct UPat {
+    UPatType type;
+    union {
+        struct {
+            Ops op;
+        } op_data;
+        struct {
+            int var_id;
+        } var_data;
+        struct {
+            double const_val;
+        } const_data;
+    };
+    UPat** src;
+    size_t src_count;
+} UPat;
+
+// Cache structures
+typedef struct UOpCacheEntry {
+    size_t key_hash;
+    UOp* value;
+    struct UOpCacheEntry* next;
+} UOpCacheEntry;
+
+typedef struct {
+    UOpCacheEntry** buckets;
+    size_t bucket_count;
+    size_t size;
+} UOpCacheTable;
+
 // Helper functions
 const char* ops_to_string(Ops op);
 bool ops_is_valid(Ops op);
 int ops_get_arity(Ops op);
 
-// Initialize module
-void uop_init(void);
-void uop_cleanup(void);
+// UOp operations
+UOp* uop_new(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void* tag);
+void uop_free(UOp* uop);
+UOp* uop_ref(UOp* uop);
+void uop_unref(UOp* uop);
+bool uop_commutative(UOp* uop);
+bool uop_is_zero(UOp* uop);
+bool uop_is_one(UOp* uop);
+int uop_divides(UOp* uop, int v);
+UOp* uop_sink(UOp** stores, size_t count);
+UOp* uop_store(UOp* buf, UOp* value);
+UOp* uop_load(UOp* buf, DType dtype);
+UOp* uop_const(DType dtype, double value);
+UOp* uop_define_global(DType dtype, int idx);
+UOp* uop_define_local(DType dtype, size_t size);
+UOp* uop_define_reg(DType dtype);
+UOp* uop_add(UOp* a, UOp* b);
+UOp* uop_mul(UOp* a, UOp* b);
+UOp* uop_sub(UOp* a, UOp* b);
+UOp* uop_div(UOp* a, UOp* b);
+UOp* uop_max(UOp* a, UOp* b);
+UOp* uop_min(UOp* a, UOp* b);
+UOp* uop_lt(UOp* a, UOp* b);
+UOp* uop_eq(UOp* a, UOp* b);
+UOp* uop_ne(UOp* a, UOp* b);
+UOp* uop_neg(UOp* a);
+UOp* uop_exp2(UOp* a);
+UOp* uop_log2(UOp* a);
+UOp* uop_sin(UOp* a);
+UOp* uop_sqrt(UOp* a);
+UOp* uop_recip(UOp* a);
+UOp* uop_cast(UOp* a, DType dtype);
+UOp* uop_where(UOp* cond, UOp* true_val, UOp* false_val);
+UOp* uop_mulacc(UOp* a, UOp* b, UOp* c);
+UOp* uop_reduce_axis(UOp* src, Ops reduce_op, int* axes, int axes_count);
+UOp* uop_view(UOp* buf, struct ShapeTracker* st);
+UOp* uop_index(UOp* buf, UOp* idx);
+UOp** uop_toposort(UOp* root, size_t* count);
+void uop_print(UOp* uop, int depth);
+void uop_print_graph(UOp* root);
+size_t uop_hash(UOp* uop);
+bool uop_equals(UOp* a, UOp* b);
+UOp* uop_simplify(UOp* uop);
+UOp* uop_ssimplify(UOp* uop);
+int uop_sym_infer(UOp* uop);
+bool uop_resolve(UOp* uop, bool default_val);
+UOp* uop_cache_get(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void* tag);
+void uop_cache_put(UOp* uop);
+UOp** uop_parents(UOp* uop, size_t* count);
+UOp* uop_replace(UOp* uop, Ops new_op, DType* new_dtype, UOp** new_src, size_t new_src_count, UOpArg* new_arg);
+
+// Pattern matching functions
+UPat* upat_op(Ops op, UPat** src, size_t src_count);
+UPat* upat_var(int id);
+UPat* upat_const(double val);
+UPat* upat_any(void);
+bool upat_match(UPat* pattern, UOp* uop);
+void upat_free(UPat* pat);
+
+// Cache management
+void uop_cache_init(void);
+void uop_cache_cleanup(void);
+
+// Module initialization
+void uop_ops_init(void);
+void uop_ops_cleanup(void);
+
+// Execution
+double exec_alu(Ops op, DType dtype, double* args, size_t arg_count);
+double identity_element(Ops op, DType* dtype);
 
 #ifdef __cplusplus
 }
