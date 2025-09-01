@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "../include/uop/uop.h"
+#include "uop/uop.h"
 #include "mathtraits.h"
 #include "dtype/dtype.h"
 

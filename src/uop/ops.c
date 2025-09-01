@@ -7,7 +7,7 @@
 #include <assert.h>
 #include <math.h>
 
-#include "../include/uop/uop.h"
+#include "uop/uop.h"
 #include "mathtraits.h"  // This provides the math_ops symbol
 
 // Forward declaration for ShapeTracker

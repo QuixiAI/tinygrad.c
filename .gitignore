@@ -92,12 +92,6 @@ docs/_build/
 doxygen/
 *.dox
 
-# Dependencies
-deps/
-vendor/
-third_party/
-external/
-
 # Generated files
 *.generated.c
 *.generated.h

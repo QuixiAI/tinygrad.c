@@ -139,19 +139,40 @@ if(BUILD_EXAMPLES)
 endif()
 
 # ---------------------------
+# Unity Test Framework
+# ---------------------------
+add_library(unity STATIC
+  third_party/unity/unity.c
+)
+target_include_directories(unity PUBLIC ${CMAKE_SOURCE_DIR}/third_party/unity)
+# Enable double support when compiling Unity
+target_compile_definitions(unity PRIVATE UNITY_INCLUDE_DOUBLE UNITY_INCLUDE_FLOAT)
+
+# ---------------------------
 # Tests
 # ---------------------------
 if(BUILD_TESTS)
+  # Create an interface library for common test dependencies
+  add_library(test_common INTERFACE)
+  target_include_directories(test_common INTERFACE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party/unity
+    ${CMAKE_SOURCE_DIR}/tests
+  )
+  target_link_libraries(test_common INTERFACE tinygradc unity)
+  
   add_executable(test_tensor   tests/test_tensor.c)
   add_executable(test_ops      tests/test_ops.c)
   add_executable(test_resnet18 tests/test_resnet18.c)
   add_executable(test_dtype    tests/test_dtype.c)
   add_executable(test_uop      tests/test_uop.c)
-  target_link_libraries(test_tensor   PRIVATE tinygradc)
-  target_link_libraries(test_ops      PRIVATE tinygradc)
-  target_link_libraries(test_resnet18 PRIVATE tinygradc)
-  target_link_libraries(test_dtype    PRIVATE tinygradc)
-  target_link_libraries(test_uop      PRIVATE tinygradc)
+  
+  target_link_libraries(test_tensor   PRIVATE test_common)
+  target_link_libraries(test_ops      PRIVATE test_common)
+  target_link_libraries(test_resnet18 PRIVATE test_common)
+  target_link_libraries(test_dtype    PRIVATE test_common)
+  target_link_libraries(test_uop      PRIVATE test_common)
 
   enable_testing()
   add_test(NAME test_tensor   COMMAND test_tensor)

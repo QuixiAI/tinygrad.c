@@ -3,16 +3,8 @@
  * Based on reference/test/test_uops.py and reference/test/unit/test_uop_spec.py
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
-#include <assert.h>
-#include <stdint.h>
+#include "test_common.h"
 #define M_PI 3.14159265358979323846
-#include <math.h>
-#include <assert.h>
-#include <stdint.h>
 
 #include "uop/uop.h"
 #include "uop/mathtraits.h"
@@ -34,47 +26,22 @@ ShapeTracker* ShapeTracker_from_shape(int* shape, int ndim) {
     return &st;
 }
 
-// Test framework macros
-#define ASSERT(cond) do { \
-    tests_run++; \
-    if (!(cond)) { \
-        printf("FAIL: %s:%d - %s\n", __FILE__, __LINE__, #cond); \
-        tests_failed++; \
-    } else { \
-        tests_passed++; \
-    } \
-} while(0)
+// Unity compatibility macros to minimize code changes
+#define ASSERT(cond) TEST_ASSERT(cond)
+#define ASSERT_NEAR(actual, expected, tolerance) TEST_ASSERT_DOUBLE_WITHIN(tolerance, expected, actual)
+#define ASSERT_FLOAT_EQ(a, b, eps) TEST_ASSERT_DOUBLE_WITHIN(eps, b, a)
 
-#define ASSERT_NEAR(actual, expected, tolerance) do { \
-    tests_run++; \
-    double _actual = (actual); \
-    double _expected = (expected); \
-    double _diff = fabs(_actual - _expected); \
-    if (_diff > (tolerance)) { \
-        printf("FAIL: %s:%d - %f != %f (diff: %f)\n", __FILE__, __LINE__, _actual, _expected, _diff); \
-        tests_failed++; \
-    } else { \
-        tests_passed++; \
-    } \
-} while(0)
+// Unity setUp and tearDown functions
+void setUp(void) {
+    // Initialize any test fixtures here if needed
+}
 
-#define ASSERT_FLOAT_EQ(a, b, eps) do { \
-    tests_run++; \
-    if (fabs((a) - (b)) > (eps)) { \
-        printf("FAIL: %s:%d - %f != %f (diff: %f)\n", __FILE__, __LINE__, (double)(a), (double)(b), fabs((a) - (b))); \
-        tests_failed++; \
-    } else { \
-        tests_passed++; \
-    } \
-} while(0)
-
-static int tests_run = 0;
-static int tests_passed = 0;
-static int tests_failed = 0;
+void tearDown(void) {
+    // Clean up after each test if needed
+}
 
 // Test Ops enum and basic operations
-void test_ops_enum() {
-    printf("Testing Ops enum values...\n");
+void test_ops_enum(void) {
     
     // Test that ops have unique values
     ASSERT(OPS_NOOP != OPS_SINK);
@@ -100,8 +67,10 @@ void test_ops_enum() {
 }
 
 // Test GroupOp classifications
-void test_group_ops() {
-    printf("Testing GroupOp classifications...\n");
+void test_group_ops(void) {
+    
+    // Intentional failure to verify Unity is working
+    // ASSERT(1 == 2);  // Uncomment to test
     
     // Test Unary ops
     ASSERT(group_op.is_unary[OPS_NEG] == true);
@@ -158,8 +127,7 @@ void test_group_ops() {
 }
 
 // Test UOp creation and basic operations
-void test_uop_creation() {
-    printf("Testing UOp creation...\n");
+void test_uop_creation(void) {
     
     // Test creating a constant UOp
     UOpArg arg = {0};
@@ -200,8 +168,7 @@ void test_uop_creation() {
 }
 
 // Test UOp cache functionality
-void test_uop_cache() {
-    printf("Testing UOp cache...\n");
+void test_uop_cache(void) {
     
     // Create identical UOps - should return same instance from cache
     UOpArg arg = {0};
@@ -227,19 +194,12 @@ void test_uop_cache() {
 }
 
 // Test MathTrait operations
-void test_math_traits() {
-    printf("Testing MathTrait operations...\n");
+void test_math_traits(void) {
     
-    printf("\n=== debug setup ===\n");
-    printf("dtypes.float32.count=%zu\n", dtypes.float32.count);
-    printf("dtypes.float32.name=%s\n", dtypes.float32.name);
-    printf("dtypes.float32._scalar=%d\n", dtypes.float32._scalar);
     
     // Create test UOps
-    printf("\n=== before uop_const ===\n");
     UOp* a = uop_const(dtypes.float32, 10.0);
     UOp* b = uop_const(dtypes.float32, 20.0);
-    printf("DEBUG: Created a=%p, b=%p\n", (void*)a, (void*)b);
     
     // Test arithmetic operations through MathTrait
     UOp* sum = a->math_ops->add(a, b, false);
@@ -255,8 +215,6 @@ void test_math_traits() {
     ASSERT(diff->op == OPS_SUB);
     
     // Dump test values for debugging
-    printf("DEBUG: a=%p, math_ops=%p\n", (void*)a, (void*)a->math_ops);
-    printf("DEBUG: math_ops->neg=%p\n", a->math_ops ? (void*)a->math_ops->neg : NULL);
     
     // Try the most minimal call possible
     UOp* neg_a = a->math_ops->neg(a);
@@ -297,8 +255,7 @@ void test_math_traits() {
 }
 
 // Test identity elements
-void test_identity_elements() {
-    printf("Testing identity elements...\n");
+void test_identity_elements(void) {
     
     // Test ADD identity (0)
     ASSERT(identity_element(OPS_ADD, &dtypes.int32) == 0.0);
@@ -317,8 +274,7 @@ void test_identity_elements() {
 }
 
 // Test exec_alu function
-void test_exec_alu() {
-    printf("Testing exec_alu...\n");
+void test_exec_alu(void) {
     
     // Test ADD
     double args_add[] = {10.0, 20.0};
@@ -365,8 +321,7 @@ void test_exec_alu() {
 }
 
 // Test building a simple computation graph
-void test_simple_computation_graph() {
-    printf("Testing simple computation graph...\n");
+void test_simple_computation_graph(void) {
     
     // Build: (a + b) * c
     UOp* a = uop_const(dtypes.float32, 10.0);
@@ -419,8 +374,7 @@ void test_simple_computation_graph() {
 }
 
 // Test DEFINE_GLOBAL and LOAD/STORE operations
-void test_buffer_operations() {
-    printf("Testing buffer operations...\n");
+void test_buffer_operations(void) {
     
     // Create buffers (using pointer dtype)
     PtrDType ptr_float32 = dtype_ptr(&dtypes.float32, -1, ADDRSPACE_GLOBAL);
@@ -472,8 +426,7 @@ void test_buffer_operations() {
 }
 
 // Test reduce operations
-void test_reduce_operations() {
-    printf("Testing reduce operations...\n");
+void test_reduce_operations(void) {
     
     // Create a buffer and load
     PtrDType ptr_float32 = dtype_ptr(&dtypes.float32, -1, ADDRSPACE_GLOBAL);
@@ -499,8 +452,7 @@ void test_reduce_operations() {
 }
 
 // Test pattern matching
-void test_pattern_matching() {
-    printf("Testing pattern matching...\n");
+void test_pattern_matching(void) {
     
     // Create a simple expression: a + b
     UOp* a = uop_const(dtypes.float32, 10.0);
@@ -542,8 +494,7 @@ void test_pattern_matching() {
 }
 
 // Test UOp hashing and equality
-void test_uop_hash_and_equality() {
-    printf("Testing UOp hashing and equality...\n");
+void test_uop_hash_and_equality(void) {
     
     // Create identical UOps
     UOp* a1 = uop_const(dtypes.float32, 42.0);
@@ -578,8 +529,7 @@ void test_uop_hash_and_equality() {
 }
 
 // Test cast operations
-void test_cast_operations() {
-    printf("Testing cast operations...\n");
+void test_cast_operations(void) {
     
     // Create float constant
     UOp* float_val = uop_const(dtypes.float32, 42.5);
@@ -596,11 +546,6 @@ void test_cast_operations() {
     UOp* bool_val = uop_cast(float_val, dtypes.bool_);
     ASSERT(bool_val != NULL);
     ASSERT(bool_val->op == OPS_CAST);
-    printf("DEBUG: bool_val->dtype @%p = {name=%s, priority=%d}, dtypes.bool_ @%p = {name=%s, priority=%d}\n", 
-           &bool_val->dtype, bool_val->dtype.name, bool_val->dtype.priority,
-           &dtypes.bool_, dtypes.bool_.name, dtypes.bool_.priority);
-    printf("DEBUG: For comparison, dtypes.int32 @%p = {name=%s, priority=%d}\n",
-           &dtypes.int32, dtypes.int32.name, dtypes.int32.priority);
     ASSERT(dtype_eq(&bool_val->dtype, &dtypes.bool_));
     
     // Clean up
@@ -610,8 +555,7 @@ void test_cast_operations() {
 }
 
 // Test special math operations
-void test_special_math_ops() {
-    printf("Testing special math operations...\n");
+void test_special_math_ops(void) {
     
     // Test EXP2
     UOp* val = uop_const(dtypes.float32, 3.0);
@@ -649,8 +593,7 @@ void test_special_math_ops() {
 }
 
 // Extended transcendental function tests
-void test_transcendental_mathematical_accuracy() {
-    printf("Testing transcendental mathematical accuracy...\n");
+void test_transcendental_mathematical_accuracy(void) {
     
     // Test values covering various ranges and edge cases
     double test_values[] = {
@@ -711,8 +654,7 @@ void test_transcendental_mathematical_accuracy() {
     }
 }
 
-void test_transcendental_edge_cases() {
-    printf("Testing transcendental edge cases...\n");
+void test_transcendental_edge_cases(void) {
     
     // Test NaN
     UOp* nan_val = uop_const(dtypes.float32, NAN);
@@ -769,8 +711,7 @@ void test_transcendental_edge_cases() {
     uop_unref(zero_val);
 }
 
-void test_transcendental_large_angles_sin() {
-    printf("Testing sine with large angles (Payne-Hanek reduction)...\n");
+void test_transcendental_large_angles_sin(void) {
     
     // Test angles that would benefit from Payne-Hanek reduction
     double large_angles[] = {
@@ -812,8 +753,7 @@ void test_transcendental_large_angles_sin() {
     }
 }
 
-void test_exp2_log2_inverse_relationship() {
-    printf("Testing exp2 and log2 inverse relationship...\n");
+void test_exp2_log2_inverse_relationship(void) {
     
     // Test that exp2(log2(x)) ≈ x for x > 0
     double test_values[] = {
@@ -846,8 +786,7 @@ void test_exp2_log2_inverse_relationship() {
     }
 }
 
-void test_transcendental_power_relationships() {
-    printf("Testing transcendental power relationships...\n");
+void test_transcendental_power_relationships(void) {
     
     // Test that 2^x = pow(2, x) and log2(x) = log(x)/log(2)
     double test_values[] = {
@@ -874,8 +813,7 @@ void test_transcendental_power_relationships() {
     }
 }
 
-void test_transcendental_performance() {
-    printf("Testing transcendental performance characteristics...\n");
+void test_transcendental_performance(void) {
     
     // Test that functions complete in reasonable time
     // No hard timing constraints, just ensure they don't hang
@@ -908,8 +846,7 @@ void test_transcendental_performance() {
 
 
 // Test bitwise operations
-void test_bitwise_operations() {
-    printf("Testing bitwise operations...\n");
+void test_bitwise_operations(void) {
     
     // Create integer constants
     UOp* a = uop_const(dtypes.int32, 0b1010);  // 10
@@ -953,8 +890,7 @@ void test_bitwise_operations() {
 }
 
 // Test ternary operations
-void test_ternary_operations() {
-    printf("Testing ternary operations...\n");
+void test_ternary_operations(void) {
     
     // Test WHERE
     UOp* cond = uop_const(dtypes.bool_, 1.0);  // true
@@ -991,8 +927,7 @@ void test_ternary_operations() {
 }
 
 // Test reference counting
-void test_reference_counting() {
-    printf("Testing reference counting...\n");
+void test_reference_counting(void) {
     
     // Create a UOp
     UOp* a = uop_const(dtypes.float32, 42.0);
@@ -1018,8 +953,7 @@ void test_reference_counting() {
 }
 
 // Test local and register definitions
-void test_local_and_register_definitions() {
-    printf("Testing local and register definitions...\n");
+void test_local_and_register_definitions(void) {
     
     // Test DEFINE_LOCAL
     PtrDType ptr_float32 = dtype_ptr(&dtypes.float32, -1, ADDRSPACE_LOCAL);
@@ -1040,8 +974,7 @@ void test_local_and_register_definitions() {
 }
 
 // Test comparison operations in detail
-void test_comparison_operations() {
-    printf("Testing comparison operations...\n");
+void test_comparison_operations(void) {
     
     UOp* a = uop_const(dtypes.float32, 10.0);
     UOp* b = uop_const(dtypes.float32, 20.0);
@@ -1091,8 +1024,7 @@ void test_comparison_operations() {
 }
 
 // Test MIN/MAX operations
-void test_min_max_operations() {
-    printf("Testing MIN/MAX operations...\n");
+void test_min_max_operations(void) {
     
     UOp* a = uop_const(dtypes.float32, 10.0);
     UOp* b = uop_const(dtypes.float32, 20.0);
@@ -1116,8 +1048,7 @@ void test_min_max_operations() {
 
 // Additional test coverage based on reference Python tests
 
-void test_symbolic_variables() {
-    printf("Testing symbolic variables...\n");
+void test_symbolic_variables(void) {
     
     // Test variable creation with range
     UOpArg var_arg = {0};
@@ -1146,8 +1077,7 @@ void test_symbolic_variables() {
     ASSERT(resolved == false);  // ambiguous, returns default (false)
 }
 
-void test_vector_operations() {
-    printf("Testing vector operations...\n");
+void test_vector_operations(void) {
     
     // Test VCONST - vector constant
     int vec_vals[] = {0, 1, 2};
@@ -1167,8 +1097,7 @@ void test_vector_operations() {
     ASSERT(gep->op == OPS_GEP);
 }
 
-void test_gated_stores() {
-    printf("Testing gated stores (IF/ENDIF)...\n");
+void test_gated_stores(void) {
     
     // Create a conditional store
     UOp* buf = uop_define_global(dtypes.float32, 0);
@@ -1190,8 +1119,7 @@ void test_gated_stores() {
     ASSERT(endif_op->op == OPS_ENDIF);
 }
 
-void test_special_ops() {
-    printf("Testing SPECIAL operations...\n");
+void test_special_ops(void) {
     
     // Test grid index special ops
     UOpArg gidx_arg = {0};
@@ -1212,8 +1140,7 @@ void test_special_ops() {
     // ASSERT(strcmp(lidx0->arg.s, "lidx0") == 0);  // TODO: Fix stub to preserve arg
 }
 
-void test_overflow_behavior() {
-    printf("Testing overflow behavior...\n");
+void test_overflow_behavior(void) {
     
     // Test uint8 overflow
     double args_overflow[] = {250.0, 250.0};
@@ -1226,8 +1153,7 @@ void test_overflow_behavior() {
     ASSERT_NEAR(result, -119.0, 0.01);  // Wraps around
 }
 
-void test_float_edge_cases() {
-    printf("Testing floating point edge cases...\n");
+void test_float_edge_cases(void) {
     
     // Test NaN
     double nan_val = 0.0/0.0;
@@ -1247,8 +1173,7 @@ void test_float_edge_cases() {
     ASSERT(isinf(result));
 }
 
-void test_integer_division() {
-    printf("Testing integer division...\n");
+void test_integer_division(void) {
     
     // Test IDIV with truncation
     double args1[] = {7.0, 3.0};
@@ -1266,8 +1191,7 @@ void test_integer_division() {
     ASSERT_NEAR(result, -1.0, 0.01);
 }
 
-void test_shift_operations() {
-    printf("Testing shift operations...\n");
+void test_shift_operations(void) {
     
     // Test SHL (shift left)
     double args_shl[] = {5.0, 2.0};
@@ -1280,8 +1204,7 @@ void test_shift_operations() {
     ASSERT_NEAR(result, 5.0, 0.01);  // 20 >> 2 = 5
 }
 
-void test_boolean_alu() {
-    printf("Testing boolean ALU operations...\n");
+void test_boolean_alu(void) {
     
     // Test XOR on booleans
     double args_xor[] = {1.0, 0.0};
@@ -1299,8 +1222,7 @@ void test_boolean_alu() {
     ASSERT_NEAR(result, 1.0, 0.01);
 }
 
-void test_simplification() {
-    printf("Testing simplification...\n");
+void test_simplification(void) {
     
     // Test x + 0 = x
     UOp* x = uop_const(dtypes.int32, 5);
@@ -1324,8 +1246,7 @@ void test_simplification() {
 
 // Additional missing test coverage
 
-void test_local_memory() {
-    printf("Testing local/shared memory operations...\n");
+void test_local_memory(void) {
     
     // Test DEFINE_LOCAL
     UOpArg size_arg = {0};
@@ -1347,8 +1268,7 @@ void test_local_memory() {
     ASSERT(load != NULL);
 }
 
-void test_constant_folding() {
-    printf("Testing constant folding...\n");
+void test_constant_folding(void) {
     
     // Test ADD constant folding
     UOp* c1 = uop_const(dtypes.float32, 1.0);
@@ -1376,8 +1296,7 @@ void test_constant_folding() {
     ASSERT_NEAR(folded->arg.const_data.const_value, 2.0, 0.001);
 }
 
-void test_bitcast_operations() {
-    printf("Testing BITCAST operations...\n");
+void test_bitcast_operations(void) {
     
     // Test float to uint32 bitcast
     UOp* float_val = uop_const(dtypes.float32, 1.0);
@@ -1393,8 +1312,7 @@ void test_bitcast_operations() {
     ASSERT(bitcast->op == OPS_BITCAST);
 }
 
-void test_assembly_optimizations() {
-    printf("Testing assembly-level optimizations...\n");
+void test_assembly_optimizations(void) {
     
     // Test MUL by power of 2 -> SHL
     UOp* x = uop_const(dtypes.int32, 5);
@@ -1409,8 +1327,7 @@ void test_assembly_optimizations() {
     ASSERT(div->op == OPS_IDIV);  // Will be optimized to SHR in renderer
 }
 
-void test_modulo_operations() {
-    printf("Testing modulo operations...\n");
+void test_modulo_operations(void) {
     
     // Test basic MOD
     double args[] = {10.0, 3.0};
@@ -1428,8 +1345,7 @@ void test_modulo_operations() {
     ASSERT_NEAR(result, 1.0, 0.01);
 }
 
-void test_graph_deduplication() {
-    printf("Testing graph deduplication...\n");
+void test_graph_deduplication(void) {
     
     // Create two identical constants
     UOp* c1 = uop_const(dtypes.float32, 5.0);
@@ -1448,8 +1364,7 @@ void test_graph_deduplication() {
     ASSERT(add2 != NULL);
 }
 
-void test_vmin_vmax_propagation() {
-    printf("Testing vmin/vmax propagation...\n");
+void test_vmin_vmax_propagation(void) {
     
     // Test variable with range
     UOpArg var_arg = {0};
@@ -1473,8 +1388,7 @@ void test_vmin_vmax_propagation() {
     ASSERT(uop_sym_infer(prod) <= 40);
 }
 
-void test_advanced_symbolic() {
-    printf("Testing advanced symbolic operations...\n");
+void test_advanced_symbolic(void) {
     
     // Test modulo congruence: (3 + 3*a) % 4 should simplify to a
     UOpArg var_arg = {0};
@@ -1493,8 +1407,7 @@ void test_advanced_symbolic() {
     ASSERT(div != NULL);
 }
 
-void test_commutative_canonicalization() {
-    printf("Testing commutative operation canonicalization...\n");
+void test_commutative_canonicalization(void) {
     
     // Constants should go to the right in commutative ops
     UOp* two = uop_const(dtypes.int32, 2);
@@ -1512,8 +1425,7 @@ void test_commutative_canonicalization() {
     ASSERT(simplified != NULL);
 }
 
-void test_memory_statistics() {
-    printf("Testing memory access statistics...\n");
+void test_memory_statistics(void) {
     
     // This would require implementing memory access counting
     // For now, just test that the structures exist
@@ -1532,8 +1444,7 @@ void test_memory_statistics() {
 
 // Additional missing tests based on thorough review
 
-void test_vectorize_operations() {
-    printf("Testing VECTORIZE operations...\n");
+void test_vectorize_operations(void) {
     
     // Test creating a vectorized UOp
     UOp* elements[4];
@@ -1547,8 +1458,7 @@ void test_vectorize_operations() {
     ASSERT(vec->src_count == 4);
 }
 
-void test_wmma_operations() {
-    printf("Testing WMMA (tensor core) operations...\n");
+void test_wmma_operations(void) {
     
     // Test WMMA operation
     UOp* a = uop_const(dtypes.float16, 1.0);
@@ -1560,8 +1470,7 @@ void test_wmma_operations() {
     ASSERT(wmma->op == OPS_WMMA);
 }
 
-void test_contract_expand_operations() {
-    printf("Testing CONTRACT and EXPAND operations...\n");
+void test_contract_expand_operations(void) {
     
     // Test CONTRACT operation
     UOp* x = uop_const(dtypes.float32, 5.0);
@@ -1581,8 +1490,7 @@ void test_contract_expand_operations() {
     ASSERT(expanded->op == OPS_EXPAND);
 }
 
-void test_assign_operations() {
-    printf("Testing ASSIGN operations...\n");
+void test_assign_operations(void) {
     
     // Test ASSIGN operation
     UOp* buf = uop_define_global(dtypes.float32, 0);
@@ -1592,16 +1500,14 @@ void test_assign_operations() {
     ASSERT(assign->op == OPS_ASSIGN);
 }
 
-void test_phi_operations() {
-    printf("Testing PHI operations...\n");
+void test_phi_operations(void) {
     
     // PHI nodes would be for SSA form - not in current ops enum
     // Skipping for now as OPS_PHI doesn't exist
-    printf("  PHI operations not yet implemented in ops enum\n");
+    // PHI operations not yet implemented - test placeholder only
 }
 
-void test_comprehensive_alu() {
-    printf("Testing comprehensive ALU operations...\n");
+void test_comprehensive_alu(void) {
     
     // Test MULACC operation
     double args_mulacc[] = {2.0, 3.0, 4.0};
@@ -1619,8 +1525,7 @@ void test_comprehensive_alu() {
     ASSERT_NEAR(result, 1.0, 0.01);  // 5 == 5 is true
 }
 
-void test_uop_immutability() {
-    printf("Testing UOp immutability...\n");
+void test_uop_immutability(void) {
     
     // UOps should be immutable after creation
     UOp* x = uop_const(dtypes.int32, 5);
@@ -1632,8 +1537,7 @@ void test_uop_immutability() {
     ASSERT(y != x);  // y should be a different UOp
 }
 
-void test_uop_children_tracking() {
-    printf("Testing UOp children tracking...\n");
+void test_uop_children_tracking(void) {
     
     // UOps should track their children
     UOp* a = uop_const(dtypes.int32, 1);
@@ -1644,8 +1548,7 @@ void test_uop_children_tracking() {
     // Note: UOp structure doesn't have children_count and children fields in this implementation
 }
 
-void test_double_cast_folding() {
-    printf("Testing double cast folding...\n");
+void test_double_cast_folding(void) {
     
     // Double casts should be folded
     UOp* x = uop_const(dtypes.float32, 5.0);
@@ -1657,8 +1560,7 @@ void test_double_cast_folding() {
     ASSERT(simplified != NULL);
 }
 
-void test_scalar_const_and_var() {
-    printf("Testing scalar constants and variables...\n");
+void test_scalar_const_and_var(void) {
     
     // Test scalar constant
     UOp* scalar = uop_const(dtypes.float32, 3.14);
@@ -1673,8 +1575,7 @@ void test_scalar_const_and_var() {
     ASSERT(var->op == OPS_DEFINE_VAR);
 }
 
-void test_gated_load_operations() {
-    printf("Testing gated LOAD operations...\n");
+void test_gated_load_operations(void) {
     
     // Test gated load (load with condition)
     UOp* buf = uop_define_global(dtypes.float32, 0);
@@ -1690,8 +1591,7 @@ void test_gated_load_operations() {
     ASSERT(load != NULL);
 }
 
-void test_range_operations() {
-    printf("Testing RANGE operations...\n");
+void test_range_operations(void) {
     
     // Test RANGE operation for loop bounds
     UOpArg range_arg = {0};
@@ -1701,8 +1601,7 @@ void test_range_operations() {
     ASSERT(range->op == OPS_RANGE);
 }
 
-void test_reduce_axis_operations() {
-    printf("Testing REDUCE_AXIS with different ops...\n");
+void test_reduce_axis_operations(void) {
     
     // Test different reduction operations
     UOp* data = uop_const(dtypes.float32, 10.0);
@@ -1721,8 +1620,7 @@ void test_reduce_axis_operations() {
     ASSERT(sum_reduce != NULL);
 }
 
-void test_const_like_operations() {
-    printf("Testing const_like operations...\n");
+void test_const_like_operations(void) {
     
     // Test creating a constant with the same type as another UOp
     UOp* x = uop_const(dtypes.float32, 5.0);
@@ -1735,18 +1633,16 @@ void test_const_like_operations() {
     ASSERT_NEAR(const_like->arg.const_data.const_value, 10.0, 0.001);
 }
 
-void test_acc_operations() {
-    printf("Testing ACC (accumulator) operations...\n");
+void test_acc_operations(void) {
     
     // ACC operation not in current ops enum
     // Would be used for loop accumulation
-    printf("  ACC operations not yet implemented in ops enum\n");
+    // ACC operations not yet implemented - test placeholder only
 }
 
 // Additional test functions for complete coverage from Python test suite
 
 static void test_memory_statistics_advanced(void) {
-    printf("\n--- Testing Advanced Memory Statistics ---\n");
     
     // Test memory access counting like in test_uops_stats.py
     UOp* buf1 = uop_define_global(dtypes.float32, 0);
@@ -1763,7 +1659,6 @@ static void test_memory_statistics_advanced(void) {
 }
 
 static void test_bounds_checking(void) {
-    printf("\n--- Testing Bounds Checking ---\n");
     
     // Test out-of-bounds access detection like test_uop_graph.py
     UOp* buf = uop_define_global(dtypes.float32, 0);
@@ -1778,7 +1673,6 @@ static void test_bounds_checking(void) {
 }
 
 static void test_symbolic_bounds(void) {
-    printf("\n--- Testing Symbolic Bounds ---\n");
     
     // Test symbolic variable bounds propagation
     UOpArg var_arg = {0};
@@ -1797,7 +1691,6 @@ static void test_symbolic_bounds(void) {
 }
 
 static void test_graph_rewrite_patterns(void) {
-    printf("\n--- Testing Graph Rewrite Patterns ---\n");
     
     // Test pattern matching and rewriting like test_uop_graph.py
     UOp* x = uop_const(dtypes.float32, 2.0);
@@ -1810,7 +1703,6 @@ static void test_graph_rewrite_patterns(void) {
 }
 
 static void test_modular_wraparound(void) {
-    printf("\n--- Testing Modular Wraparound ---\n");
     
     // Test integer wraparound behavior for different dtypes
     UOp* max_int8 = uop_const(dtypes.int8, 127);
@@ -1823,7 +1715,6 @@ static void test_modular_wraparound(void) {
 }
 
 static void test_shape_validation(void) {
-    printf("\n--- Testing Shape Validation ---\n");
     
     // Test shape specification validation like test_uop_spec.py
     UOp* buf = uop_define_global(dtypes.float32, 0);
@@ -1837,7 +1728,6 @@ static void test_shape_validation(void) {
 }
 
 static void test_type_inference(void) {
-    printf("\n--- Testing Type Inference ---\n");
     
     // Test automatic type promotion and inference
     UOp* x = uop_const(dtypes.float32, 1.0);
@@ -1849,7 +1739,6 @@ static void test_type_inference(void) {
 }
 
 static void test_uop_str_repr(void) {
-    printf("\n--- Testing UOp String Representation ---\n");
     
     // Test string representation like test_uops.py TestUOpStr
     UOp* x = uop_const(dtypes.float32, 3.14);
@@ -1868,7 +1757,6 @@ static void test_uop_str_repr(void) {
 }
 
 static void test_exec_alu_overflow(void) {
-    printf("\n--- Testing ALU Overflow Behavior ---\n");
     
     // Test overflow handling like TestExecALU.test_overflow
     double max_int32 = 2147483647.0;
@@ -1879,7 +1767,6 @@ static void test_exec_alu_overflow(void) {
 }
 
 static void test_division_by_zero(void) {
-    printf("\n--- Testing Division by Zero ---\n");
     
     // Test division by zero handling
     double result = exec_alu(OPS_FDIV, dtypes.float32, (double[]){1.0, 0.0}, 2);
@@ -1891,7 +1778,6 @@ static void test_division_by_zero(void) {
 }
 
 static void test_nan_inf_handling(void) {
-    printf("\n--- Testing NaN and Infinity Handling ---\n");
     
     // Test NaN propagation
     double nan = NAN;
@@ -1905,7 +1791,6 @@ static void test_nan_inf_handling(void) {
 }
 
 static void test_boolean_logic_comprehensive(void) {
-    printf("\n--- Testing Comprehensive Boolean Logic ---\n");
     
     // Test all boolean operations like TestBoolUOps
     for (int a = 0; a <= 1; a++) {
@@ -1926,7 +1811,6 @@ static void test_boolean_logic_comprehensive(void) {
 }
 
 static void test_shift_edge_cases(void) {
-    printf("\n--- Testing Shift Operation Edge Cases ---\n");
     
     // Test shift with negative values (should be prevented)
     double result = exec_alu(OPS_SHL, dtypes.int32, (double[]){1, -1}, 2);
@@ -1939,7 +1823,6 @@ static void test_shift_edge_cases(void) {
 }
 
 static void test_gemm_optimization(void) {
-    printf("\n--- Testing GEMM Optimization ---\n");
     
     // Test matrix multiplication patterns like test_uops_stats.py
     UOp* a = uop_define_global(dtypes.float32, 0);
@@ -1955,7 +1838,6 @@ static void test_gemm_optimization(void) {
 }
 
 static void test_broadcast_and_expand(void) {
-    printf("\n--- Testing Broadcast and Expand Operations ---\n");
     
     // Test EXPAND operation like TestExpander
     UOpArg expand_arg = {0};
@@ -1976,7 +1858,6 @@ static void test_broadcast_and_expand(void) {
 // Final missing test coverage from Python test suite
 
 static void test_int32_operations(void) {
-    printf("\n--- Testing Int32-specific Operations ---\n");
     
     // Test int32 ADD
     double result = exec_alu(OPS_ADD, dtypes.int32, (double[]){100, 200}, 2);
@@ -2000,7 +1881,6 @@ static void test_int32_operations(void) {
 }
 
 static void test_float16_operations(void) {
-    printf("\n--- Testing Float16 Operations ---\n");
     
     // Test float16 WHERE
     UOp* cond = uop_const(dtypes.bool_, 1);
@@ -2011,7 +1891,6 @@ static void test_float16_operations(void) {
 }
 
 static void test_uop_methods(void) {
-    printf("\n--- Testing UOp Methods ---\n");
     
     // Test compare_alu_same_src_different_arg
     UOpArg arg1 = {0};
@@ -2034,7 +1913,6 @@ static void test_uop_methods(void) {
 }
 
 static void test_shape_spec_validation(void) {
-    printf("\n--- Testing Shape Specification Validation ---\n");
     
     // Test no implicit broadcasting
     UOp* buf1 = uop_define_global(dtypes.float32, 0);
@@ -2050,7 +1928,6 @@ static void test_shape_spec_validation(void) {
 }
 
 static void test_symbolic_resolution(void) {
-    printf("\n--- Testing Symbolic Resolution ---\n");
     
     // Test simple int resolution
     UOpArg arg = {0};
@@ -2072,7 +1949,6 @@ static void test_symbolic_resolution(void) {
 }
 
 static void test_graph_rewrite_const(void) {
-    printf("\n--- Testing Graph Constant Rewriting ---\n");
     
     // Test GEP constant folding
     UOpArg vec_arg = {0};
@@ -2090,7 +1966,6 @@ static void test_graph_rewrite_const(void) {
 }
 
 static void test_memory_count_stats(void) {
-    printf("\n--- Testing Memory Count Statistics ---\n");
     
     // Test counting memory accesses
     UOp* buf1 = uop_define_global(dtypes.float32, 0);
@@ -2112,7 +1987,6 @@ static void test_memory_count_stats(void) {
 }
 
 static void test_symbolic_numeric(void) {
-    printf("\n--- Testing Symbolic Numeric Operations ---\n");
     
     // Test symbolic variable operations
     UOpArg var_arg = {0};
@@ -2123,12 +1997,12 @@ static void test_symbolic_numeric(void) {
     // x + 5
     UOp* five = uop_const(dtypes.int32, 5);
     // Extended transcendental function tests
-    test_transcendental_mathematical_accuracy();
-    test_transcendental_edge_cases();
-    test_transcendental_large_angles_sin();
-    test_exp2_log2_inverse_relationship();
-    test_transcendental_power_relationships();
-    test_transcendental_performance();
+    RUN_TEST(test_transcendental_mathematical_accuracy);
+    RUN_TEST(test_transcendental_edge_cases);
+    RUN_TEST(test_transcendental_large_angles_sin);
+    RUN_TEST(test_exp2_log2_inverse_relationship);
+    RUN_TEST(test_transcendental_power_relationships);
+    RUN_TEST(test_transcendental_performance);
     UOp* sum = uop_add(x, five);
     
     // Should handle symbolic arithmetic
@@ -2136,7 +2010,6 @@ static void test_symbolic_numeric(void) {
 }
 
 static void test_vmin_vmax_divmod(void) {
-    printf("\n--- Testing vmin/vmax for Division and Modulo ---\n");
     fflush(stdout);
     
     // Test division bounds
@@ -2149,16 +2022,13 @@ static void test_vmin_vmax_divmod(void) {
     
     // Should compute bounds for division
     if (!div) {
-        fprintf(stderr, "ERROR: div is NULL\n");
+        TEST_FAIL_MESSAGE("div is NULL");
         ASSERT(0);
         return;
     }
     
     int min_val = uop_vmin(div);
     int max_val = uop_vmax(div);
-    fprintf(stderr, "DEBUG: Variable x range: [%d, %d]\n", uop_vmin(x), uop_vmax(x));
-    fprintf(stderr, "DEBUG: Division result range: [%d, %d]\n", min_val, max_val);
-    fprintf(stderr, "DEBUG: div->op = %d (IDIV=%d, FDIV=%d)\n", div->op, OPS_IDIV, OPS_FDIV);
     fflush(stderr);
     // For now, just check that we got reasonable bounds
     // x in [0,100], x/10 should be in [0,10]
@@ -2166,7 +2036,6 @@ static void test_vmin_vmax_divmod(void) {
 }
 
 static void test_upat_helpers(void) {
-    printf("\n--- Testing UPat Helper Functions ---\n");
     
     // Test pattern location tracking
     UPat* pat = upat_op(OPS_ADD, NULL, 0);
@@ -2178,7 +2047,6 @@ static void test_upat_helpers(void) {
 }
 
 static void test_uop_tags(void) {
-    printf("\n--- Testing UOp Tags ---\n");
     
     // Test tag-based operations
     UOp* x = uop_const(dtypes.int32, 1);
@@ -2192,7 +2060,6 @@ static void test_uop_tags(void) {
 // Additional specific tests from Python suite
 
 static void test_timing(void) {
-    printf("\n--- Testing UOp Creation Timing ---\n");
     
     // Test that UOp creation is reasonably fast
     UOp* x = uop_const(dtypes.float32, 1.0);
@@ -2203,7 +2070,6 @@ static void test_timing(void) {
 }
 
 static void test_setitem(void) {
-    printf("\n--- Testing SetItem Operations ---\n");
     
     // Test setting items in buffers
     UOp* buf = uop_define_global(dtypes.float32, 0);
@@ -2217,7 +2083,6 @@ static void test_setitem(void) {
 }
 
 static void test_use_cmpeq(void) {
-    printf("\n--- Testing CMPEQ Usage Optimization ---\n");
     
     // Test that CMPEQ is used for equality comparisons
     UOp* a = uop_const(dtypes.int32, 5);
@@ -2227,7 +2092,6 @@ static void test_use_cmpeq(void) {
 }
 
 static void test_fast_idiv_and_mod(void) {
-    printf("\n--- Testing Fast Integer Division and Modulo ---\n");
     
     // Test fast division by constant optimization
     UOp* x = uop_const(dtypes.int32, 100);
@@ -2240,7 +2104,6 @@ static void test_fast_idiv_and_mod(void) {
 }
 
 static void test_fast_idiv_overflow(void) {
-    printf("\n--- Testing Fast Division Overflow ---\n");
     
     // Test division overflow edge cases
     double min_int = -2147483648.0;
@@ -2250,7 +2113,6 @@ static void test_fast_idiv_overflow(void) {
 }
 
 static void test_mulacc_unrolled(void) {
-    printf("\n--- Testing Unrolled MULACC ---\n");
     
     // Test unrolled multiply-accumulate patterns
     UOp* acc = uop_const(dtypes.float32, 0);
@@ -2263,7 +2125,6 @@ static void test_mulacc_unrolled(void) {
 }
 
 static void test_device_arg(void) {
-    printf("\n--- Testing Device Argument Strings ---\n");
     
     // Test device argument representation
     UOpArg dev_arg = {0};
@@ -2275,7 +2136,6 @@ static void test_device_arg(void) {
 }
 
 static void test_reduceop_arg(void) {
-    printf("\n--- Testing ReduceOp Arguments ---\n");
     
     // Test reduce operation arguments
     UOp* x = uop_const(dtypes.float32, 1.0);
@@ -2288,7 +2148,6 @@ static void test_reduceop_arg(void) {
 }
 
 static void test_packed_smem_size(void) {
-    printf("\n--- Testing Packed Shared Memory Size ---\n");
     
     // Test packed shared memory sizing
     UOpArg size_arg = {0};
@@ -2301,7 +2160,6 @@ static void test_packed_smem_size(void) {
 }
 
 static void test_test_payne_hanek_reduction(void) {
-    printf("\n--- Testing Payne-Hanek Reduction ---\n");
     
     // Test special trigonometric reduction
     UOp* large_angle = uop_const(dtypes.float32, 1000000.0);
@@ -2312,7 +2170,6 @@ static void test_test_payne_hanek_reduction(void) {
 }
 
 static void test_where_same_fold(void) {
-    printf("\n--- Testing WHERE Same Branch Folding ---\n");
     
     // Test WHERE with same true/false branches
     UOp* cond = uop_const(dtypes.bool_, 1);
@@ -2325,7 +2182,6 @@ static void test_where_same_fold(void) {
 }
 
 static void test_depth_2_operations(void) {
-    printf("\n--- Testing Depth-2 Graph Operations ---\n");
     
     // Test operations at depth 2 in graph
     UOp* a = uop_const(dtypes.float32, 1);
@@ -2343,8 +2199,7 @@ static void test_depth_2_operations(void) {
 // These tests were identified as critical gaps compared to Python reference
 
 // 1. Graph Rewriting and Optimization Tests
-void test_graph_constant_folding_depth2() {
-    printf("Testing graph constant folding depth-2...\n");
+void test_graph_constant_folding_depth2(void) {
     
     // Test: (v + const1) + const2 → v + (const1 + const2)
     UOpArg var_arg = {0};
@@ -2363,8 +2218,7 @@ void test_graph_constant_folding_depth2() {
     ASSERT(expr != NULL);  // Basic creation test until implementation
 }
 
-void test_where_same_branch_folding() {
-    printf("Testing WHERE same branch folding...\n");
+void test_where_same_branch_folding(void) {
     
     UOp* cond = uop_const(dtypes.bool_, 1);
     UOp* val = uop_const(dtypes.float32, 42.0);
@@ -2378,8 +2232,7 @@ void test_where_same_branch_folding() {
 }
 
 // 2. Memory Access and Bounds Checking Tests
-void test_out_of_bounds_detection() {
-    printf("Testing out-of-bounds access detection...\n");
+void test_out_of_bounds_detection(void) {
     
     UOp* buf = uop_define_global(dtypes.int32, 0);
     UOp* idx = uop_const(dtypes.int32, 42);  // Potentially out of bounds
@@ -2392,8 +2245,7 @@ void test_out_of_bounds_detection() {
     ASSERT(load != NULL);  // Basic creation test until implementation
 }
 
-void test_symbolic_bounds_checking() {
-    printf("Testing symbolic bounds checking...\n");
+void test_symbolic_bounds_checking(void) {
     
     UOp* buf = uop_define_global(dtypes.int32, 0);
     UOpArg var_arg = {0};
@@ -2408,8 +2260,7 @@ void test_symbolic_bounds_checking() {
     ASSERT(load != NULL);  // Basic creation test until implementation
 }
 
-void test_gated_memory_access() {
-    printf("Testing gated memory access...\n");
+void test_gated_memory_access(void) {
     
     UOp* buf = uop_define_global(dtypes.float32, 0);
     UOp* idx = uop_const(dtypes.int32, 5);
@@ -2427,8 +2278,7 @@ void test_gated_memory_access() {
 }
 
 // 3. UOp Specification Validation Tests
-void test_no_implicit_broadcasting() {
-    printf("Testing no implicit broadcasting validation...\n");
+void test_no_implicit_broadcasting(void) {
     
     UOp* buf1 = uop_define_global(dtypes.float32, 0);
     UOp* buf2 = uop_define_global(dtypes.float32, 1);
@@ -2444,8 +2294,7 @@ void test_no_implicit_broadcasting() {
     ASSERT(result != NULL);  // Basic creation test until implementation
 }
 
-void test_reduce_store_validation() {
-    printf("Testing reduce store validation...\n");
+void test_reduce_store_validation(void) {
     
     UOp* buf = uop_define_global(dtypes.float32, 0);
     UOp* data = uop_load(buf, dtypes.float32);
@@ -2459,132 +2308,132 @@ void test_reduce_store_validation() {
     ASSERT(reduced != NULL);  // Basic test for now
 }
 
-int main() {
-    printf("=== Testing UOp System (TDD) ===\n");
-    printf("NOTE: All tests are expected to FAIL as implementation is not done\n\n");
-    
+int main(void) {
     // Initialize modules
     dtypes_init();
     uop_init();
     uop_cache_init();
     uop_ops_init();
     
-    // Run tests
-    test_ops_enum();
-    test_group_ops();
-    test_uop_creation();
-    test_uop_cache();
+    // Initialize Unity
+    UNITY_BEGIN();
     
-    test_math_traits();
-    test_identity_elements();
-    test_exec_alu();
-    test_simple_computation_graph();
-    test_buffer_operations();
-    test_reduce_operations();
-    test_pattern_matching();
-    test_uop_hash_and_equality();
-    test_cast_operations();
-    test_special_math_ops();
-    test_bitwise_operations();
-    test_ternary_operations();
-    test_reference_counting();
-    test_local_and_register_definitions();
-    test_comparison_operations();
-    test_min_max_operations();
+    // Run tests
+    RUN_TEST(test_ops_enum);
+    RUN_TEST(test_group_ops);
+    RUN_TEST(test_uop_creation);
+    RUN_TEST(test_uop_cache);
+    
+    RUN_TEST(test_math_traits);
+    RUN_TEST(test_identity_elements);
+    RUN_TEST(test_exec_alu);
+    RUN_TEST(test_simple_computation_graph);
+    RUN_TEST(test_buffer_operations);
+    RUN_TEST(test_reduce_operations);
+    RUN_TEST(test_pattern_matching);
+    RUN_TEST(test_uop_hash_and_equality);
+    RUN_TEST(test_cast_operations);
+    RUN_TEST(test_special_math_ops);
+    RUN_TEST(test_bitwise_operations);
+    RUN_TEST(test_ternary_operations);
+    RUN_TEST(test_reference_counting);
+    RUN_TEST(test_local_and_register_definitions);
+    RUN_TEST(test_comparison_operations);
+    RUN_TEST(test_min_max_operations);
     
     // Additional test coverage from Python tests
-    test_symbolic_variables();
-    test_vector_operations();
-    test_gated_stores();
-    test_special_ops();
-    test_overflow_behavior();
-    test_float_edge_cases();
-    test_integer_division();
-    test_shift_operations();
-    test_boolean_alu();
-    test_simplification();
+    RUN_TEST(test_symbolic_variables);
+    RUN_TEST(test_vector_operations);
+    RUN_TEST(test_gated_stores);
+    RUN_TEST(test_special_ops);
+    RUN_TEST(test_overflow_behavior);
+    RUN_TEST(test_float_edge_cases);
+    RUN_TEST(test_integer_division);
+    RUN_TEST(test_shift_operations);
+    RUN_TEST(test_boolean_alu);
+    RUN_TEST(test_simplification);
     
     // Additional comprehensive test coverage
-    test_local_memory();
-    test_constant_folding();
-    test_bitcast_operations();
-    test_assembly_optimizations();
-    test_modulo_operations();
-    test_graph_deduplication();
-    test_vmin_vmax_propagation();
-    test_advanced_symbolic();
-    test_commutative_canonicalization();
-    test_memory_statistics();
+    RUN_TEST(test_local_memory);
+    RUN_TEST(test_constant_folding);
+    RUN_TEST(test_bitcast_operations);
+    RUN_TEST(test_assembly_optimizations);
+    RUN_TEST(test_modulo_operations);
+    RUN_TEST(test_graph_deduplication);
+    RUN_TEST(test_vmin_vmax_propagation);
+    RUN_TEST(test_advanced_symbolic);
+    RUN_TEST(test_commutative_canonicalization);
+    RUN_TEST(test_memory_statistics);
     
     // Comprehensive missing test coverage
-    test_vectorize_operations();
-    test_wmma_operations();
-    test_contract_expand_operations();
-    test_assign_operations();
-    test_phi_operations();
-    test_comprehensive_alu();
-    test_uop_immutability();
-    test_uop_children_tracking();
-    test_double_cast_folding();
-    test_scalar_const_and_var();
-    test_gated_load_operations();
-    test_range_operations();
-    test_reduce_axis_operations();
-    test_const_like_operations();
-    test_acc_operations();
+    RUN_TEST(test_vectorize_operations);
+    RUN_TEST(test_wmma_operations);
+    RUN_TEST(test_contract_expand_operations);
+    RUN_TEST(test_assign_operations);
+    RUN_TEST(test_phi_operations);
+    RUN_TEST(test_comprehensive_alu);
+    RUN_TEST(test_uop_immutability);
+    RUN_TEST(test_uop_children_tracking);
+    RUN_TEST(test_double_cast_folding);
+    RUN_TEST(test_scalar_const_and_var);
+    RUN_TEST(test_gated_load_operations);
+    RUN_TEST(test_range_operations);
+    RUN_TEST(test_reduce_axis_operations);
+    RUN_TEST(test_const_like_operations);
+    RUN_TEST(test_acc_operations);
     
     // Additional tests for complete coverage
-    test_memory_statistics_advanced();
-    test_bounds_checking();
-    test_symbolic_bounds();
-    test_graph_rewrite_patterns();
-    test_modular_wraparound();
-    test_shape_validation();
-    test_type_inference();
-    test_uop_str_repr();
-    test_exec_alu_overflow();
-    test_division_by_zero();
-    test_nan_inf_handling();
-    test_boolean_logic_comprehensive();
-    test_shift_edge_cases();
-    test_gemm_optimization();
-    test_broadcast_and_expand();
+    RUN_TEST(test_memory_statistics_advanced);
+    RUN_TEST(test_bounds_checking);
+    RUN_TEST(test_symbolic_bounds);
+    RUN_TEST(test_graph_rewrite_patterns);
+    RUN_TEST(test_modular_wraparound);
+    RUN_TEST(test_shape_validation);
+    RUN_TEST(test_type_inference);
+    RUN_TEST(test_uop_str_repr);
+    RUN_TEST(test_exec_alu_overflow);
+    RUN_TEST(test_division_by_zero);
+    RUN_TEST(test_nan_inf_handling);
+    RUN_TEST(test_boolean_logic_comprehensive);
+    RUN_TEST(test_shift_edge_cases);
+    RUN_TEST(test_gemm_optimization);
+    RUN_TEST(test_broadcast_and_expand);
     
     // Final missing test coverage
-    test_int32_operations();
-    test_float16_operations();
-    test_uop_methods();
-    test_shape_spec_validation();
-    test_symbolic_resolution();
-    test_graph_rewrite_const();
-    test_memory_count_stats();
-    test_symbolic_numeric();
-    test_vmin_vmax_divmod();
-    test_upat_helpers();
-    test_uop_tags();
+    RUN_TEST(test_int32_operations);
+    RUN_TEST(test_float16_operations);
+    RUN_TEST(test_uop_methods);
+    RUN_TEST(test_shape_spec_validation);
+    RUN_TEST(test_symbolic_resolution);
+    RUN_TEST(test_graph_rewrite_const);
+    RUN_TEST(test_memory_count_stats);
+    RUN_TEST(test_symbolic_numeric);
+    RUN_TEST(test_vmin_vmax_divmod);
+    RUN_TEST(test_upat_helpers);
+    RUN_TEST(test_uop_tags);
     
     // Additional specific Python tests
-    test_timing();
-    test_setitem();
-    test_use_cmpeq();
-    test_fast_idiv_and_mod();
-    test_fast_idiv_overflow();
-    test_mulacc_unrolled();
-    test_device_arg();
-    test_reduceop_arg();
-    test_packed_smem_size();
-    test_test_payne_hanek_reduction();
-    test_where_same_fold();
-    test_depth_2_operations();
+    RUN_TEST(test_timing);
+    RUN_TEST(test_setitem);
+    RUN_TEST(test_use_cmpeq);
+    RUN_TEST(test_fast_idiv_and_mod);
+    RUN_TEST(test_fast_idiv_overflow);
+    RUN_TEST(test_mulacc_unrolled);
+    RUN_TEST(test_device_arg);
+    RUN_TEST(test_reduceop_arg);
+    RUN_TEST(test_packed_smem_size);
+    RUN_TEST(test_test_payne_hanek_reduction);
+    RUN_TEST(test_where_same_fold);
+    RUN_TEST(test_depth_2_operations);
     
     // Additional tests - comment out undefined ones
-    // test_graph_constant_folding_depth2();
-    test_where_same_branch_folding();
-    // test_out_of_bounds_detection();
-    // test_symbolic_bounds_checking();
-    test_gated_memory_access();
-    // test_no_implicit_broadcasting();
-    test_reduce_store_validation();
+    // test_graph_constant_folding_depth2);
+    RUN_TEST(test_where_same_branch_folding);
+    // test_out_of_bounds_detection);
+    // test_symbolic_bounds_checking);
+    RUN_TEST(test_gated_memory_access);
+    // test_no_implicit_broadcasting);
+    RUN_TEST(test_reduce_store_validation);
     
     // Cleanup
     uop_ops_cleanup();
@@ -2592,18 +2441,6 @@ int main() {
     // uop_cleanup();  // TODO: Implement if needed
     dtypes_cleanup();
     
-    // Report results
-    printf("\n=== Test Results ===\n");
-    printf("Tests run: %d\n", tests_run);
-    printf("Tests passed: %d\n", tests_passed);
-    printf("Tests failed: %d\n", tests_failed);
-    printf("Test coverage: %.1f%% (estimated)\n", (double)tests_run / 600.0 * 100.0);
-    
-    if (tests_failed == 0) {
-        printf("\nSUCCESS: All tests passed!\n");
-        return 0;
-    } else {
-        printf("\nFAILURE: %d tests failed\n", tests_failed);
-        return 1;
-    }
+    // End Unity and return results
+    return UNITY_END();
 }

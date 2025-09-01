@@ -7,8 +7,8 @@
 #include <assert.h>
 #include <stdarg.h>
 
-#include "../include/uop/uop.h"
-#include "../include/dtype/dtype.h"  // For dtypes
+#include "uop/uop.h"
+#include "dtype/dtype.h"  // For dtypes
 
 // Forward declarations
 typedef struct Context {

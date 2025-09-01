@@ -7,8 +7,8 @@
 #include <math.h>
 #include <assert.h>
 
-#include "../include/uop/uop.h"
-#include "../include/dtype/dtype.h"
+#include "uop/uop.h"
+#include "dtype/dtype.h"
 #include "mathtraits.h"
 
 // Forward declarations

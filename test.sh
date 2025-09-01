@@ -1,37 +1,10 @@
 #!/bin/bash
 set -e
 
-echo "Running tinygrad.c test suite..."
+# Build if needed
+[ ! -f "build/test_tensor" ] && ./build.sh
 
-# Ensure project is built
-if [ ! -f "build/test_tensor" ]; then
-    echo "Build directory not found. Building first..."
-    ./build.sh
-fi
-
-echo ""
-echo "=== Running Individual Tests ==="
-
-# Run each test individually for better output
-echo "Running test_dtype..."
-./build/test_dtype
-
-echo ""
-echo "Running test_tensor..."
-./build/test_tensor
-
-echo ""
-echo "Running test_ops..."
-./build/test_ops
-
-echo ""
-echo "Running test_resnet18..."
-./build/test_resnet18
-
-echo ""
-echo "=== Running CTest Suite ==="
-cd build && ctest --output-on-failure
-cd ..
-
-echo ""
-echo "All tests completed successfully!"
+# Run all Unity tests directly for proper reporting
+for test in build/test_*; do
+    [ -x "$test" ] && "$test"
+done

@@ -6,9 +6,9 @@
 #include <stdbool.h>
 #include <math.h>
 
-#include "../include/uop/uop.h"
-#include "../include/dtype/dtype.h"
-#include "../include/shape/shapetracker.h"
+#include "uop/uop.h"
+#include "dtype/dtype.h"
+#include "shape/shapetracker.h"
 
 // Forward declarations from other modules
 extern UOp* symbolic_simplify(UOp* uop);

@@ -56,7 +56,7 @@ schedule/             # Scheduling and kernelization
 backends/               # Pluggable GPU/accelerator backend implementations
 generators/manifest/    # Manifest generator for client bindings
 examples/               # Example programs
-tests/                  # Test executables
+tests/                  # Test executables (using Unity test framework)
 reference/              # Original tinygrad Python source (for reference only)
 
 ````
@@ -70,7 +70,16 @@ reference/              # Original tinygrad Python source (for reference only)
 - C compiler (GCC, Clang, or AppleClang)
 - [Python 3](https://www.python.org/) (for manifest generation)
 
-**Configure and build:**
+**Test Framework:**
+- Tests use the [Unity](https://github.com/ThrowTheSwitch/Unity) test framework (included in third_party/unity/)
+
+**Quick build:**
+```bash
+./build.sh    # Configure and build project
+./test.sh     # Run all tests
+```
+
+**Manual build:**
 ```bash
 cmake -S . -B build -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON
 cmake --build build -j
@@ -80,14 +89,20 @@ cmake --build build -j
 
 ## Running Tests
 
-Tests are built as executables and also registered with `ctest`.
+Tests use the Unity framework and are built as executables registered with `ctest`.
 
-**Run directly:**
-
+**Run all tests:**
 ```bash
-./build/test_tensor; echo
-./build/test_ops; echo
-./build/test_resnet18; echo
+./test.sh
+```
+
+**Run individual tests:**
+```bash
+./build/test_tensor
+./build/test_ops
+./build/test_resnet18
+./build/test_dtype
+./build/test_uop
 ```
 
 **Or run all with CTest:**

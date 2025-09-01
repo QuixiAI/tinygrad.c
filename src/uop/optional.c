@@ -6,8 +6,8 @@
 #include <stdbool.h>
 #include <math.h>
 
-#include "../include/uop/uop.h"
-#include "../include/dtype/dtype.h"
+#include "uop/uop.h"
+#include "dtype/dtype.h"
 
 // Forward declarations from transcendental.c
 extern const DType* TRANSCENDENTAL_SUPPORTED_DTYPES[];
