@@ -8,7 +8,15 @@
 extern "C" {
 #endif
 
-/* TODO: public declarations */
+/* Forward declarations */
+struct UOp;
+
+/* Test validation function - stub for TDD */
+#define SPEC_ERR_UNIMPL -9999  /* Indicates function not implemented */
+#define SPEC_ERR_INVALID -1     /* Indicates validation failed */
+#define SPEC_OK 0               /* Indicates validation passed */
+
+int helper_test_verify_ast(struct UOp* store);
 
 #ifdef __cplusplus
 }

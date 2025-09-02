@@ -8,7 +8,15 @@
 extern "C" {
 #endif
 
-/* TODO: public declarations */
+/* ShapeTracker stub for TDD - will be fully implemented later */
+struct ShapeTracker {
+    int shape[8];
+    int ndim;
+    // TODO: Add views, strides, offset, mask, contiguous flags, etc.
+};
+
+// Constructor function for ShapeTracker
+struct ShapeTracker* ShapeTracker_from_shape(int* shape, int ndim);
 
 #ifdef __cplusplus
 }

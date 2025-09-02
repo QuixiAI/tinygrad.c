@@ -946,6 +946,24 @@ UOp* uop_create_variable(int min_val, int max_val) {
     return var;
 }
 
+// Stub implementations for additional resolve functions (TDD)
+int uop_resolve_int(UOp* uop) {
+    // Stub: Return 0 for now, will fail tests as expected in TDD
+    (void)uop;  // Silence unused parameter warning
+    return 0;
+}
+
+float uop_resolve_float(UOp* uop) {
+    // Stub: Return 0.0 for now, will fail tests as expected in TDD
+    (void)uop;  // Silence unused parameter warning
+    return 0.0f;
+}
+
+bool uop_resolve_bool(UOp* uop) {
+    // Stub: Just use the existing resolve with true as default
+    return uop_resolve(uop, true);
+}
+
 // Variable binding function
 UOp* uop_bind(UOp* var, UOp* value) {
     if (var->op != OPS_DEFINE_VAR) {
@@ -1182,16 +1200,7 @@ bool upat_match(UPat* pattern, UOp* uop) {
     return result;
 }
 
-void upat_free(UPat* pat) {
-    if (!pat) return;
-    if (pat->src) {
-        for (size_t i = 0; i < pat->src_count; i++) {
-            upat_free(pat->src[i]);
-        }
-        free(pat->src);
-    }
-    free(pat);
-}
+// upat_free is now defined in upat.c
 
 // Line 802-900: Execution
 // Line 802: def exec_alu(op:Ops, dtype:DType, args:tuple[ConstType, ...]):

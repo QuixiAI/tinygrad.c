@@ -7,6 +7,7 @@
 #include <math.h>
 
 #include "uop/uop.h"
+#include "uop/spec.h"
 #include "dtype/dtype.h"
 #include "shape/shapetracker.h"
 
@@ -499,4 +500,15 @@ PatternMatcher* create_ast_spec(void) {
     if (validate_ast_root(NULL, 0)) { /* Placeholder to use function */ }
     
     return pattern_matcher_new(matches, match_count, false);
+}
+
+// Test validation function - stub for TDD
+// This should fail for proper TDD - tests expect this to work
+int helper_test_verify_ast(struct UOp* store) {
+    (void)store;  // Silence unused parameter warning
+    // For TDD: Always fail with "not implemented" 
+    // Tests that expect success will fail (good for TDD)
+    // Tests that expect failure will need special handling
+    fprintf(stderr, "helper_test_verify_ast: NOT IMPLEMENTED\n");
+    return SPEC_ERR_UNIMPL;
 }

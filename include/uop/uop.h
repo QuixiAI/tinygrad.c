@@ -157,7 +157,8 @@ typedef enum {
     ARG_CONST,
     ARG_INT,
     ARG_REDUCE,
-    ARG_SHAPE_TRACKER
+    ARG_SHAPE_TRACKER,
+    ARG_VAR  // For variables with ranges
 } UOpArgType;
 
 typedef struct UOpArg {
@@ -177,6 +178,10 @@ typedef struct UOpArg {
         struct {
             void* st;  // ShapeTracker*
         } st_data;
+        struct {
+            int vmin;
+            int vmax;
+        } var;  // For variable ranges
     };
 } UOpArg;
 
@@ -366,6 +371,12 @@ int uop_vmin(UOp* uop);
 int uop_vmax(UOp* uop);
 int uop_sym_infer(UOp* uop);
 bool uop_resolve(UOp* uop, bool default_val);
+
+// Additional resolve functions for TDD tests
+int uop_resolve_int(UOp* uop);
+float uop_resolve_float(UOp* uop);
+bool uop_resolve_bool(UOp* uop);
+
 UOp* uop_cache_get(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void* tag);
 void uop_cache_put(UOp* uop);
 UOp** uop_parents(UOp* uop, size_t* count);
