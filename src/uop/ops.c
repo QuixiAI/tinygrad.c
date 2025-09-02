@@ -8,7 +8,7 @@
 #include <math.h>
 
 #include "uop/uop.h"
-#include "mathtraits.h"  // This provides the math_ops symbol
+#include "uop/mathtraits.h"  // This provides the math_ops symbol
 
 // Forward declaration for ShapeTracker
 typedef struct ShapeTracker {

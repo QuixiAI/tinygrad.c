@@ -20,13 +20,17 @@ cd build && ctest --output-on-failure
 ```
 
 ### Testing instructions
-The project uses a single comprehensive test suite that covers multiple components:
-- UOp system tests in `tests/test_uop.c` (496 tests)
-- DType system tests in `tests/test_dtype.c`
-- Tensor operations in `tests/test_tensor.c`
-- End-to-end examples in `tests/test_resnet18.c`
+The project uses Unity test framework with Test-Driven Development (TDD) approach:
+- Tests distributed across multiple suites in `tests/` and `tests/uop/`
+- Total of 75 test cases in UOp subsystem alone
+- Dot-reporter style output: `.` for pass, `F` for fail, `X` for crash
 
-You must run `./test.sh` to see the overall test coverage and identify specific failures.
+Run tests with:
+```bash
+./test.sh          # Dot-reporter style with summary
+./test.sh -p       # Run tests in parallel
+./build/test_NAME  # Run individual test suite
+```
 
 ## Project overview
 
@@ -56,10 +60,11 @@ Many modules are stubbed (return `TG_ERR_UNIMPL`) to allow compilation while inc
 - Reference Python code available in `reference/` directory
 
 ### Current focus
-The UOp system is currently undergoing implementation and optimization:
-- 91.5% test coverage achieved (454/496 tests passing)
-- Remaining failures focus on reference counting, symbolic variables, and constant folding
-- Progressive approach: fix basic issues first, then optimize performance
+The project follows Test-Driven Development with Unity framework:
+- Tests written first to drive implementation
+- Stub implementations compile but fail at runtime (`TG_ERR_UNIMPL`)
+- Current test status visible via dot-reporter output
+- Progressive approach: fix test failures to drive feature completion
 
 ## Key files
 
@@ -82,20 +87,57 @@ The UOp system is currently undergoing implementation and optimization:
 
 ## Testing guidelines
 
-### How to test
-After making changes to the UOp system:
-1. Run `./test.sh` to see overall status
-2. Focus on `tests/test_uop.c` for UOp-specific failures
-3. Check for memory leaks and reference counting issues
-4. Verify symbolic variable inference (`uop_sym_infer`)
-5. Test constant folding and simplification rules
+### How to write tests
+Tests use Unity framework with automatic registration:
 
-### Test priorities
-1. Reference counting and memory management
-2. Core operations (ADD, SUB, MUL, DIV, comparisons)
-3. Symbolic variable creation and resolution
-4. Constant folding and expression simplification
-5. Advanced features (WMMA, vectorization, etc.)
+```c
+#include "test_common.h"  // Includes Unity and utilities
+
+// Define test functions with TEST() macro
+TEST(test_feature_name) {
+    // Arrange
+    int expected = 42;
+    int actual = my_function();
+    
+    // Assert
+    TEST_ASSERT_EQUAL(expected, actual);
+}
+
+// Auto-register and run all tests
+TEST_MAIN()
+```
+
+Common Unity assertions:
+- `TEST_ASSERT_EQUAL(expected, actual)` - Value comparison
+- `TEST_ASSERT_TRUE/FALSE(condition)` - Boolean checks  
+- `TEST_ASSERT_NULL/NOT_NULL(pointer)` - Pointer validation
+- `TEST_ASSERT_FLOAT_WITHIN(delta, expected, actual)` - Float comparison
+- `TEST_FAIL_MESSAGE(message)` - Explicit failure
+
+### TDD workflow
+1. **Write failing tests first** - Tests drive implementation
+2. **Implement minimal code** - Just enough to pass tests
+3. **Refactor** - Improve code while keeping tests green
+4. **Never suppress failures** - Let tests fail naturally
+
+### Test organization
+- `tests/test_*.c` - Main module tests
+- `tests/uop/test_*.c` - UOp subsystem tests:
+  - `test_ops.c` (21 tests) - Core operations
+  - `test_uop.c` (13 tests) - UOp creation and management
+  - `test_optional.c` (11 tests) - Optional features
+  - `test_symbolic.c` (8 tests) - Symbolic computation
+  - `test_transcendental.c` (7 tests) - Math functions
+  - `test_mathtraits.c` (6 tests) - Mathematical traits
+  - `test_spec.c` (5 tests) - Specifications
+  - `test_upat.c` (4 tests) - Pattern matching
+
+### Running tests
+After making changes:
+1. Run `./test.sh` to see dot-reporter output
+2. Failed tests show detailed error messages
+3. Crashed tests marked with `X` indicate segfaults
+4. Check specific suite with `./build/test_NAME`
 
 ## Special considerations
 

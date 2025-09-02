@@ -31,10 +31,41 @@ else
             output=$("$test" 2>&1)
             exit_code=$?
             
-            # Check for segfault or core dump
-            if echo "$output" | grep -q "Segmentation fault\|core dumped" || [ "$exit_code" -eq 139 ] || [ "$exit_code" -eq 134 ]; then
-                suite_name=$(basename "$test")
-                crashed_suites="$crashed_suites  $suite_name (CRASHED)\n"
+            # Check for crash and determine signal
+            if [ "$exit_code" -gt 128 ]; then
+                # Get relative path from build directory
+                suite_path=$(echo "$test" | sed 's|^build/test_||')
+                # Find the actual source file
+                if [ -f "tests/uop/test_${suite_path}.c" ]; then
+                    suite_file="tests/uop/test_${suite_path}.c"
+                elif [ -f "tests/test_${suite_path}.c" ]; then
+                    suite_file="tests/test_${suite_path}.c"
+                else
+                    suite_file="tests/test_${suite_path}.c"  # fallback
+                fi
+                
+                # Determine signal name from exit code
+                signal_num=$((exit_code - 128))
+                case $signal_num in
+                    1) signal_name="SIGHUP" ;;
+                    2) signal_name="SIGINT" ;;
+                    3) signal_name="SIGQUIT" ;;
+                    4) signal_name="SIGILL" ;;
+                    5) signal_name="SIGTRAP" ;;
+                    6) signal_name="SIGABRT" ;;
+                    7) signal_name="SIGBUS" ;;
+                    8) signal_name="SIGFPE" ;;
+                    9) signal_name="SIGKILL" ;;
+                    10) signal_name="SIGUSR1" ;;
+                    11) signal_name="SIGSEGV" ;;
+                    12) signal_name="SIGUSR2" ;;
+                    13) signal_name="SIGPIPE" ;;
+                    14) signal_name="SIGALRM" ;;
+                    15) signal_name="SIGTERM" ;;
+                    *) signal_name="signal $signal_num" ;;
+                esac
+                
+                crashed_suites="$crashed_suites  $suite_file ($signal_name)\n"
                 printf "X"
                 continue
             fi
@@ -53,16 +84,23 @@ else
                         printf "F"
                         total_failed=$((total_failed + 1))
                         total_tests=$((total_tests + 1))
-                        # Extract test name and failure details
-                        test_name=$(echo "$line" | sed 's/:FAIL.*//')
-                        test_name=$(basename "$test_name")
+                        
+                        # Extract full path, line number, and test name from Unity output
+                        # Format: /full/path/file.c:line:test_name:FAIL...
+                        full_path=$(echo "$line" | cut -d: -f1)
+                        line_num=$(echo "$line" | cut -d: -f2)
+                        test_name=$(echo "$line" | cut -d: -f3)
                         suite_name=$(basename "$test")
+                        
+                        # Convert absolute path to relative path
+                        rel_path=$(echo "$full_path" | sed "s|$PWD/||")
+                        
                         # Get the failure message if available
                         fail_msg=$(echo "$line" | sed 's/.*:FAIL[: ]*//')
                         if [ -z "$fail_msg" ] || [ "$fail_msg" = "$line" ]; then
-                            failed_details="$failed_details\n  ✗ $suite_name :: $test_name"
+                            failed_details="$failed_details\n  ✗ $suite_name :: $rel_path:$line_num:$test_name"
                         else
-                            failed_details="$failed_details\n  ✗ $suite_name :: $test_name\n      $fail_msg"
+                            failed_details="$failed_details\n  ✗ $suite_name :: $rel_path:$line_num:$test_name\n      $fail_msg"
                         fi
                     fi
                 done <<< "$output"

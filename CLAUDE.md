@@ -85,3 +85,63 @@ Many modules are stubbed (return `TG_ERR_UNIMPL`) to allow compilation while inc
 5. Original Python reference code available in `reference/` directory
 
 The current focus is on CPU-only functionality with plans for modular GPU backend plugins.
+
+## Testing
+
+The project uses the Unity test framework for C unit testing. Tests follow Test-Driven Development (TDD) principles.
+
+### Running Tests
+
+```bash
+./test.sh          # Run all tests with dot-reporter style output
+./test.sh -p       # Run tests in parallel
+./build/test_NAME  # Run individual test suite
+```
+
+Test output shows:
+- `.` for passing tests
+- `F` for failing tests  
+- `X` for crashed test suites
+- `i` for ignored tests
+
+### Writing Tests
+
+Tests are located in `tests/` with Unity test framework patterns:
+
+```c
+#include "test_common.h"  // Includes Unity and common test utilities
+
+// Define test functions using TEST() macro
+TEST(test_example) {
+    TEST_ASSERT_EQUAL(expected, actual);
+    TEST_ASSERT_TRUE(condition);
+    TEST_ASSERT_FALSE(!condition);
+    TEST_ASSERT_FLOAT_WITHIN(delta, expected, actual);
+}
+
+// Use TEST_MAIN() to auto-register and run all tests
+TEST_MAIN()
+```
+
+The `TEST()` macro automatically registers test functions, eliminating manual test listing. Common Unity assertions:
+- `TEST_ASSERT_EQUAL(expected, actual)` - Compare values
+- `TEST_ASSERT_TRUE/FALSE(condition)` - Boolean checks
+- `TEST_ASSERT_NULL/NOT_NULL(pointer)` - Pointer validation
+- `TEST_ASSERT_FLOAT_WITHIN(delta, expected, actual)` - Float comparison with tolerance
+- `TEST_FAIL_MESSAGE(message)` - Explicit failure with message
+
+### Test Organization
+
+- `tests/test_*.c` - Main test files
+- `tests/uop/test_*.c` - UOp subsystem tests (75 test cases)
+- `tests/test_common.h` - Shared test configuration and utilities
+
+### TDD Approach
+
+Following TDD principles:
+1. Write failing tests first
+2. Implement minimal code to pass tests
+3. Refactor while keeping tests green
+4. **Never suppress test failures** - let tests fail naturally to drive implementation
+
+Stub implementations should compile but fail at runtime (return `TG_ERR_UNIMPL` or similar).
