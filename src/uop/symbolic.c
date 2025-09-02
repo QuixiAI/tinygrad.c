@@ -39,10 +39,8 @@ static size_t partition(void** items, size_t count, bool (*pred)(void*), void***
     void** true_items = malloc(count * sizeof(void*));
     void** false_items = malloc(count * sizeof(void*));
     if (!true_items || !false_items) {
-        free(true_items);
-        // Remove unused expression
-        free(true_items);
-        free(false_items);
+        if (true_items) free(true_items);
+        if (false_items) free(false_items);
         return 0;
     }
     

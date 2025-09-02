@@ -589,11 +589,12 @@ TEST(test_if_uops_create_ifs) {
     UOp* ne_result = uop_ne(lidx, const_2);  // lidx != 2
     UOp* gate = uop_and(valid, ne_result);   // valid & (lidx != 2)
     
-    // Store to local memory
+    // Store to local memory (conditional on gate)
     UOp* idx = uop_const(dtypes.int32, 0);
     UOp* const_42 = uop_const(dtypes.float32, 42);
     UOp* indexed_sbuf = uop_index(sbuf, idx);
-    UOp* st = uop_store(indexed_sbuf, const_42);
+    UOp* conditional_val = uop_where(gate, const_42, uop_const(dtypes.float32, 0));
+    UOp* st = uop_store(indexed_sbuf, conditional_val);
     
     // Barrier
     UOp* barrier = uop_new(OPS_BARRIER, dtypes.void_, &st, 1, NULL, NULL);
@@ -605,7 +606,9 @@ TEST(test_if_uops_create_ifs) {
     UOp* indexed_gbuf = uop_index(gbuf, idx);
     UOp* store = uop_store(indexed_gbuf, lbuf);
     
-    UOp* sink = uop_sink(&store, 1);
+    // Include barrier in the sink
+    UOp* sink_ops[] = {barrier, store};
+    UOp* sink = uop_sink(sink_ops, 2);
     
     // After full rewrite, should create IF blocks
     TEST_ASSERT_NOT_NULL(sink);

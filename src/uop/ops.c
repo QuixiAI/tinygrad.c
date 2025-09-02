@@ -844,42 +844,30 @@ int uop_vmin(UOp* uop) {
         return true_vmin < false_vmin ? true_vmin : false_vmin;
     }
     
-    // SHL (left shift)
+    // SHL (left shift) - Python only handles constant shift case
     if (uop->op == OPS_SHL && uop->src_count == 2) {
         int s0_vmin = uop_vmin(uop->src[0]);
-        int s0_vmax = uop_vmax(uop->src[0]);
         int s1_vmin = uop_vmin(uop->src[1]);
         int s1_vmax = uop_vmax(uop->src[1]);
         
-        if (s1_vmin >= 0 && s1_vmax < 32) {
-            // Safe shift range
-            if (s0_vmin >= 0) {
-                return s0_vmin << s1_vmin;
-            } else if (s0_vmax < 0) {
-                return s0_vmin << s1_vmax;
-            } else {
-                // Mixed sign, min could be very negative
-                return s0_vmin << s1_vmax;
-            }
+        // Python: if s1_vmin == s1_vmax: return s0_vmin << s1_vmin
+        if (s1_vmin == s1_vmax && s1_vmin >= 0 && s1_vmin < 32) {
+            return s0_vmin << s1_vmin;
         }
         return (int)dtypes_min(&uop->dtype);
     }
     
-    // SHR (right shift)
+    // SHR (right shift) - Python only handles constant shift case
     if (uop->op == OPS_SHR && uop->src_count == 2) {
         int s0_vmin = uop_vmin(uop->src[0]);
-        int s0_vmax = uop_vmax(uop->src[0]);
         int s1_vmin = uop_vmin(uop->src[1]);
         int s1_vmax = uop_vmax(uop->src[1]);
         
-        if (s1_vmin >= 0 && s1_vmax < 32) {
-            if (s0_vmin >= 0) {
-                return s0_vmin >> s1_vmax;
-            } else {
-                return s0_vmin >> s1_vmin;
-            }
+        // Python: if s1_vmin == s1_vmax: return s0_vmin >> s1_vmin
+        if (s1_vmin == s1_vmax && s1_vmin >= 0 && s1_vmin < 32) {
+            return s0_vmin >> s1_vmin;
         }
-        return 0;
+        return (int)dtypes_min(&uop->dtype);
     }
     
     // AND operation with positive constant
@@ -1057,40 +1045,28 @@ int uop_vmax(UOp* uop) {
         return true_vmax > false_vmax ? true_vmax : false_vmax;
     }
     
-    // SHL (left shift)
+    // SHL (left shift) - Python only handles constant shift case
     if (uop->op == OPS_SHL && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
         int s0_vmax = uop_vmax(uop->src[0]);
         int s1_vmin = uop_vmin(uop->src[1]);
         int s1_vmax = uop_vmax(uop->src[1]);
         
-        if (s1_vmin >= 0 && s1_vmax < 32) {
-            // Safe shift range
-            if (s0_vmax >= 0) {
-                return s0_vmax << s1_vmax;
-            } else if (s0_vmin < 0) {
-                return s0_vmax << s1_vmin;
-            } else {
-                // Mixed sign
-                return s0_vmax << s1_vmax;
-            }
+        // Python: if s1_vmin == s1_vmax: return s0_vmax << s1_vmin
+        if (s1_vmin == s1_vmax && s1_vmin >= 0 && s1_vmin < 32) {
+            return s0_vmax << s1_vmin;
         }
         return (int)dtypes_max(&uop->dtype);
     }
     
-    // SHR (right shift)
+    // SHR (right shift) - Python only handles constant shift case
     if (uop->op == OPS_SHR && uop->src_count == 2) {
         int s0_vmax = uop_vmax(uop->src[0]);
         int s1_vmin = uop_vmin(uop->src[1]);
         int s1_vmax = uop_vmax(uop->src[1]);
         
-        if (s1_vmin >= 0 && s1_vmax < 32) {
-            if (s0_vmax >= 0) {
-                return s0_vmax >> s1_vmin;
-            } else {
-                // Arithmetic right shift of negative number
-                return -1;  // Sign extension fills with 1s
-            }
+        // Python: if s1_vmin == s1_vmax: return s0_vmax >> s1_vmin
+        if (s1_vmin == s1_vmax && s1_vmin >= 0 && s1_vmin < 32) {
+            return s0_vmax >> s1_vmin;
         }
         return (int)dtypes_max(&uop->dtype);
     }

@@ -344,13 +344,8 @@ TEST(test_symbolic_mod_bounds) {
     UOp* var_y = uop_var_with_range("y", dtypes.int32, 1, 10);
     UOp* mod_result = uop_mod(var_x, var_y);
     
-    // Debug: print actual values
-    int actual_min = uop_vmin(mod_result);
-    int actual_max = uop_vmax(mod_result);
-    fprintf(stderr, "test_symbolic_mod_bounds: actual_min=%d, actual_max=%d, expected_min=0, expected_max=9\n", actual_min, actual_max);
-    
-    TEST_ASSERT_EQUAL(0, actual_min);
-    TEST_ASSERT_EQUAL(9, actual_max);  // max(y)-1
+    TEST_ASSERT_EQUAL(0, uop_vmin(mod_result));
+    TEST_ASSERT_EQUAL(9, uop_vmax(mod_result));  // max(y)-1
 }
 
 // Port of test_mod_remove from Python
