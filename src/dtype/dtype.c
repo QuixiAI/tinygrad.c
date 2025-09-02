@@ -112,8 +112,12 @@ DType dtype_vec(const DType* dt, int sz) {
     vec_dt._scalar = dt;
     
     // Update name to include vector size (simplified)
-    char vec_name[32];
-    snprintf(vec_name, sizeof(vec_name), "%s%d", dt->name, sz);
+    char vec_name[64]; // Increased size to avoid truncation
+    int written = snprintf(vec_name, sizeof(vec_name), "%s%d", dt->name, sz);
+    if (written >= (int)sizeof(vec_name)) {
+        // Truncation would occur, handle gracefully
+        vec_name[sizeof(vec_name) - 1] = '\0';
+    }
     strncpy(vec_dt.name, vec_name, sizeof(vec_dt.name) - 1);
     vec_dt.name[sizeof(vec_dt.name) - 1] = '\0';
     vec_dt.fmt = 0; // vectorized types have no fmt
@@ -348,7 +352,8 @@ FInfo dtypes_finfo(const DType* dt) {
 
 // Type promotion lattice - faithful port of Python promo_lattice
 // Python: promo_lattice = { dtypes.bool: [dtypes.int8, dtypes.uint8], dtypes.int8: [dtypes.int16], ...}
-static const DType** g_promo_lattice[16]; // Max 16 entries for now
+// g_promo_lattice is unused but kept for future implementation
+// static const DType** g_promo_lattice[16]; // Max 16 entries for now
 static PromoLatticeEntry g_promo_entries[16];
 static int g_promo_entry_count = 0;
 

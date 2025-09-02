@@ -359,6 +359,7 @@ UOp** uop_toposort(UOp* root, size_t* count);
 void uop_print(UOp* uop, int depth);
 void uop_print_graph(UOp* root);
 size_t uop_hash(UOp* uop);
+bool uop_equals(UOp* a, UOp* b);
 UOp* uop_simplify(UOp* uop);
 UOp* uop_ssimplify(UOp* uop);
 int uop_vmin(UOp* uop);

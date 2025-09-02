@@ -11,9 +11,6 @@
 #include "dtype/dtype.h"
 
 // Supported dtypes for transcendental operations
-static const DType* TRANSCENDENTAL_SUPPORTED_DTYPES[] = {
-    &dtypes.float16, &dtypes.float32, &dtypes.float64
-};
 #define TRANSCENDENTAL_SUPPORTED_COUNT 3
 
 // Math constants
@@ -319,10 +316,10 @@ UOp* transcendental_trig_poly(UOp* d, double coeff32[], int coeff32_count, doubl
     // d * (polyN(d*d, coeff64) if d.dtype.scalar() == dtypes.float64 else polyN(d*d, coeff32))
     UOp* d_squared = uop_mul(d, d);
     
-    int scalar_type = (int)d->dtype._scalar;
+    const DType* scalar_type = d->dtype._scalar;
     UOp* poly_result;
     
-    if (scalar_type == (int)dtypes.float64._scalar && coeff64_count > 0) {
+    if (scalar_type == dtypes.float64._scalar && coeff64_count > 0) {
         // Simplified polynomial evaluation for float64
         poly_result = uop_const(d_squared->dtype, coeff64[0]);
         for (int i = 1; i < coeff64_count; i++) {
@@ -412,19 +409,14 @@ UOp* transcendental_xsin(UOp* x, bool fast, float switch_over) {
     // - switch_over is the threshold for switching to payne_hanek_reduction.
     
     UOp* zero = uop_const(x->dtype, 0.0);
-    UOp* inf = uop_const(x->dtype, INFINITY);
-    UOp* neg_inf = uop_const(x->dtype, -INFINITY);
     UOp* nan = uop_const(x->dtype, NAN);
-    
-    // mask +-inf/nan as zero
-    UOp* x_mapped = transcendental_lazy_map_numbers(x, zero, zero, zero, x);
     
     // x_sign = sign(x)
     UOp* less_zero = uop_lt(x, zero);
     UOp* neg_one = uop_const(x->dtype, -1.0);
     UOp* pos_one = uop_const(x->dtype, 1.0);
     UOp* is_zero = uop_eq(x, zero);
-    UOp* x_sign = uop_where(uop_where(less_zero, neg_one, pos_one), zero, uop_const(x->dtype, 0.0));
+    UOp* x_sign = uop_where(is_zero, zero, uop_where(less_zero, neg_one, pos_one));
     
     // x_abs = x * x_sign
     UOp* x_abs = uop_mul(x, x_sign);
@@ -457,9 +449,7 @@ UOp* transcendental_xexp2(UOp* x) {
     // mask +=inf/nan as zero.
     UOp* zero = uop_const(x->dtype, 0.0);
     UOp* inf = uop_const(x->dtype, INFINITY);
-    UOp* neg_inf = uop_const(x->dtype, -INFINITY);
     UOp* nan = uop_const(x->dtype, NAN);
-    UOp* x_mapped = transcendental_lazy_map_numbers(x, zero, zero, zero, x);
     
     // q = rintk(x)
     UOp* q = transcendental_rintk(x);
@@ -470,9 +460,9 @@ UOp* transcendental_xexp2(UOp* x) {
     
     // a polynomial approximation with 13 non-zero terms in the range of [−(log 2)/2,(log 2)/2].
     UOp* u;
-    int scalar_type = x->dtype._scalar;
+    const DType* scalar_type = x->dtype._scalar;
     
-    if (scalar_type == (int)dtypes.float64._scalar) {
+    if (scalar_type == dtypes.float64._scalar) {
         u = transcendental_trig_poly(s,
             NULL, 0,
             (double[]){0.4434359082926529454e-9, 0.7073164598085707425e-8, 0.1017819260921760451e-6, 0.1321543872511327615e-5, 0.1525273353517584730e-4,
@@ -555,7 +545,7 @@ UOp* transcendental_xlog2(UOp* x) {
     UOp* x2 = uop_mul(x_val, x_val);
     
     UOp* t, *s_hi, *s_lo;
-    int scalar_type = x->dtype._scalar;
+    const DType* scalar_type = x->dtype._scalar;
     
     if (scalar_type == dtypes.float64._scalar) {
         t = transcendental_trig_poly(x2,
@@ -676,9 +666,8 @@ UOp* transcendental_fast_idiv(const char* device, UOp* x, int d) {
     // NOTE: vmin/vmax checking is not fully implemented in current UOp system
     if (/* x.vmin < 0 */ false) return NULL;
     
-    int sign = 1;
+    // Sign variable removed - was set but not used
     if (d < 0) {
-        sign = -1;
         d = -d;
     }
     

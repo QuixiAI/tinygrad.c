@@ -8,7 +8,7 @@ void tearDown(void) {
     // Clean up after each test if needed
 }
 
-void test_tensor_basic_operations(void) {
+TEST(test_tensor_basic_operations) {
     tg_ctx_t ctx;
     TEST_ASSERT_EQUAL(0, tgCreateContext(&ctx));
     
@@ -30,10 +30,5 @@ void test_tensor_basic_operations(void) {
     TEST_ASSERT_EQUAL(0, tgDestroyContext(ctx));
 }
 
-int main(void) {
-    UNITY_BEGIN();
-    
-    RUN_TEST(test_tensor_basic_operations);
-    
-    return UNITY_END();
-}
+// Auto-register all test functions and run them
+TEST_MAIN()

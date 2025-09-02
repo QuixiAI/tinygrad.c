@@ -162,23 +162,22 @@ if(BUILD_TESTS)
   )
   target_link_libraries(test_common INTERFACE tinygradc unity)
   
-  add_executable(test_tensor   tests/test_tensor.c)
-  add_executable(test_ops      tests/test_ops.c)
-  add_executable(test_resnet18 tests/test_resnet18.c)
-  add_executable(test_dtype    tests/test_dtype.c)
-  add_executable(test_uop      tests/test_uop.c)
+  # Find all test files recursively
+  file(GLOB_RECURSE TEST_SOURCES tests/*.c)
   
-  target_link_libraries(test_tensor   PRIVATE test_common)
-  target_link_libraries(test_ops      PRIVATE test_common)
-  target_link_libraries(test_resnet18 PRIVATE test_common)
-  target_link_libraries(test_dtype    PRIVATE test_common)
-  target_link_libraries(test_uop      PRIVATE test_common)
+  # Create test executables from found files
+  foreach(test_source ${TEST_SOURCES})
+    # Get filename without extension
+    get_filename_component(test_name ${test_source} NAME_WE)
+    
+    # Create executable
+    add_executable(${test_name} ${test_source})
+    target_link_libraries(${test_name} PRIVATE test_common)
+    
+    # Register as test
+    add_test(NAME ${test_name} COMMAND ${test_name})
+  endforeach()
 
   enable_testing()
-  add_test(NAME test_tensor   COMMAND test_tensor)
-  add_test(NAME test_ops      COMMAND test_ops)
-  add_test(NAME test_resnet18 COMMAND test_resnet18)
-  add_test(NAME test_dtype    COMMAND test_dtype)
-  add_test(NAME test_uop      COMMAND test_uop)
   
 endif()

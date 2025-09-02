@@ -18,7 +18,7 @@ void tearDown(void) {
 }
 
 // Test basic DType creation - based on reference/test/test_dtype.py
-void test_dtype_creation(void) {
+TEST(test_dtype_creation) {
     
     // Test basic types match Python definitions exactly
     TEST_ASSERT_EQUAL(0, dtypes.bool_.priority);
@@ -55,7 +55,7 @@ void test_dtype_creation(void) {
 }
 
 // Test type checking functions based on reference/test/unit/test_dtype_spec.py
-void test_dtype_type_checks(void) {
+TEST(test_dtype_type_checks) {
     
     // Test is_float
     TEST_ASSERT_TRUE(dtypes_is_float(&dtypes.float32));
@@ -98,7 +98,7 @@ void test_dtype_type_checks(void) {
 }
 
 // Test vectorization with scalar extraction
-void test_dtype_vectorization(void) {
+TEST(test_dtype_vectorization) {
     
     // Test vec() method
     DType vec2 = dtype_vec(&dtypes.float32, 2);
@@ -123,7 +123,7 @@ void test_dtype_vectorization(void) {
 }
 
 // Test dtype range values - based on test_dtype_spec.py:test_dtype_range
-void test_dtype_range(void) {
+TEST(test_dtype_range) {
     
     // Test float types (should be -inf/+inf)
     TEST_ASSERT_TRUE(isinf(dtypes_min(&dtypes.float32)) && dtypes_min(&dtypes.float32) < 0);
@@ -153,7 +153,7 @@ void test_dtype_range(void) {
 }
 
 // Test finfo function - based on test_dtype_spec.py
-void test_dtype_finfo(void) {
+TEST(test_dtype_finfo) {
     
     // Test values from Python: dtypes.finfo() returns (exponent, mantissa)
     FInfo info_f16 = dtypes_finfo(&dtypes.float16);
@@ -182,7 +182,7 @@ void test_dtype_finfo(void) {
 }
 
 // Test from_py functionality - based on test_dtype_spec.py:test_from_py
-void test_dtype_from_py(void) {
+TEST(test_dtype_from_py) {
     
     // Python: assert dtypes.from_py(True) == dtypes.bool
     DType dt_bool = dtypes_from_py_bool(true);
@@ -198,7 +198,7 @@ void test_dtype_from_py(void) {
 }
 
 // Test truncate_fp16 - based on test_dtype_spec.py:test_truncate_fp16
-void test_truncate_fp16(void) {
+TEST(test_truncate_fp16) {
     
     // Python test cases:
     // self.assertEqual(truncate_fp16(1), 1)
@@ -219,7 +219,7 @@ void test_truncate_fp16(void) {
 }
 
 // Test type promotion - based on test_dtype_spec.py:test_dtype_promo  
-void test_dtype_promotion(void) {
+TEST(test_dtype_promotion) {
     
     // Python test cases from test_dtype_promo() - these must match exactly:
     
@@ -285,7 +285,7 @@ void test_dtype_promotion(void) {
 }
 
 // Test sum accumulator dtype - based on test_dtype_alu.py:test_sum
-void test_sum_acc_dtype(void) {
+TEST(test_sum_acc_dtype) {
     
     // From Python test_sum():
     // assert (Tensor([0, 1], dtype=dtypes.bool)).sum().dtype == dtypes.int32
@@ -318,7 +318,7 @@ void test_sum_acc_dtype(void) {
 }
 
 // Test least_upper_float - based on test_dtype_spec.py:TestAutoCastType
-void test_least_upper_float(void) {
+TEST(test_least_upper_float) {
     
     // Python: if input is float, should return input unchanged
     DType result = least_upper_float(&dtypes.float32);
@@ -336,7 +336,7 @@ void test_least_upper_float(void) {
 }
 
 // Test aliases work correctly
-void test_dtype_aliases(void) {
+TEST(test_dtype_aliases) {
     
     // Test aliases match Python definitions
     TEST_ASSERT_TRUE(dtype_eq(&dtypes.half, &dtypes.float16));
@@ -353,7 +353,7 @@ void test_dtype_aliases(void) {
 }
 
 // Test string conversion
-void test_string_conversion(void) {
+TEST(test_string_conversion) {
     
     // Test to_dtype function
     DType result = to_dtype("float32");
@@ -373,7 +373,7 @@ void test_string_conversion(void) {
     TEST_ASSERT_TRUE(dtype_eq(&result, &dtypes.int32));
 }
 
-void test_comprehensive_dtype_features(void) {
+TEST(test_comprehensive_dtype_features) {
     // Test ImageDType creation
     int shape[] = {224, 224, 3};
     ImageDType img_h = dtypes_imageh(shape, 3);
@@ -399,23 +399,5 @@ void test_comprehensive_dtype_features(void) {
     TEST_ASSERT_DOUBLE_WITHIN(0.01, 1.5, truncated);
 }
 
-int main(void) {
-    UNITY_BEGIN();
-    
-    // Run tests based on Python test suite
-    RUN_TEST(test_dtype_creation);
-    RUN_TEST(test_dtype_type_checks);
-    RUN_TEST(test_dtype_vectorization);
-    RUN_TEST(test_dtype_range);
-    RUN_TEST(test_dtype_finfo);
-    RUN_TEST(test_dtype_from_py);
-    RUN_TEST(test_truncate_fp16);
-    RUN_TEST(test_dtype_promotion);
-    RUN_TEST(test_sum_acc_dtype);
-    RUN_TEST(test_least_upper_float);
-    RUN_TEST(test_dtype_aliases);
-    RUN_TEST(test_string_conversion);
-    RUN_TEST(test_comprehensive_dtype_features);
-    
-    return UNITY_END();
-}
+// Auto-register all test functions and run them
+TEST_MAIN()

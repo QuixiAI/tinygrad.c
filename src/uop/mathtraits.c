@@ -10,18 +10,20 @@
 #include "dtype/dtype.h"
 
 // Helper function to check if operation is unary
-static bool is_unary_op(Ops op) {
-    return (op == OPS_NEG || op == OPS_RECIP || op == OPS_EXP2 || op == OPS_LOG2 ||
-            op == OPS_SIN || op == OPS_SQRT);
-}
+// Currently unused but will be needed for proper implementation
+// static bool is_unary_op(Ops op) {
+//     return (op == OPS_NEG || op == OPS_RECIP || op == OPS_EXP2 || op == OPS_LOG2 ||
+//             op == OPS_SIN || op == OPS_SQRT);
+// }
 
 // Helper function to check if operation is binary
-static bool is_binary_op(Ops op) {
-    return (op == OPS_ADD || op == OPS_SUB || op == OPS_MUL || op == OPS_FDIV ||
-            op == OPS_IDIV || op == OPS_MOD || op == OPS_CMPLT || op == OPS_CMPNE ||
-            op == OPS_CMPEQ || op == OPS_XOR || op == OPS_OR || op == OPS_AND ||
-            op == OPS_SHL || op == OPS_SHR || op == OPS_MAX || op == OPS_POW);
-}
+// Currently unused but will be needed for proper implementation
+// static bool is_binary_op(Ops op) {
+//     return (op == OPS_ADD || op == OPS_SUB || op == OPS_MUL || op == OPS_FDIV ||
+//             op == OPS_IDIV || op == OPS_MOD || op == OPS_CMPLT || op == OPS_CMPNE ||
+//             op == OPS_CMPEQ || op == OPS_XOR || op == OPS_OR || op == OPS_AND ||
+//             op == OPS_SHL || op == OPS_SHR || op == OPS_MAX || op == OPS_POW);
+// }
 
 // Forward declarations from ops.c
 extern UOp* uop_add(UOp* a, UOp* b);
@@ -63,8 +65,8 @@ static UOp* ufix_impl(UOp* self, void* x) {
 }
 
 // Line 12: def _binop(self, op, x, reverse): return self.ufix(x).alu(op, self) if reverse else self.alu(op, self.ufix(x))
-static UOp* binop_impl(UOp* self, Ops op, void* x, bool reverse) {
-    UOp* x_fixed = ufix_impl(self, x);
+static UOp* binop_impl(UOp* self, Ops op, UOp* x, bool reverse) {
+    UOp* x_fixed = ufix_impl(self, (void*)x);
     if (reverse) {
         // reverse: x.alu(op, self)
         UOp* src[] = {self};
@@ -79,8 +81,8 @@ static UOp* binop_impl(UOp* self, Ops op, void* x, bool reverse) {
 // Line 13: def logical_not(self): return self.ne(True)
 static UOp* logical_not_impl(UOp* self) {
     // self.ne(True) - not equal to true
-    double true_val = 1.0;
-    return binop_impl(self, OPS_CMPNE, &true_val, false);
+    UOp* true_val = const_like_impl(self, 1.0);
+    return binop_impl(self, OPS_CMPNE, true_val, false);
 }
 
 // Line 14-16: def neg(self):
@@ -126,47 +128,47 @@ static void check_dtype_impl(UOp* self) {
 }
 
 // Line 21-38: def add(self, x, reverse=False):
-static UOp* add_impl(UOp* self, void* x, bool reverse) {
+static UOp* add_impl(UOp* self, UOp* x, bool reverse) {
     return binop_impl(self, OPS_ADD, x, reverse);
 }
 
 // Line 39-57: def mul(self, x, reverse=False):
-static UOp* mul_impl(UOp* self, void* x, bool reverse) {
+static UOp* mul_impl(UOp* self, UOp* x, bool reverse) {
     return binop_impl(self, OPS_MUL, x, reverse);
 }
 
 // Line 58-71: def bitwise_and(self, x, reverse=False):
-static UOp* bitwise_and_impl(UOp* self, void* x, bool reverse) {
+static UOp* bitwise_and_impl(UOp* self, UOp* x, bool reverse) {
     check_dtype_impl(self);
     return binop_impl(self, OPS_AND, x, reverse);
 }
 
 // Line 72-85: def bitwise_or(self, x, reverse=False):
-static UOp* bitwise_or_impl(UOp* self, void* x, bool reverse) {
+static UOp* bitwise_or_impl(UOp* self, UOp* x, bool reverse) {
     check_dtype_impl(self);
     return binop_impl(self, OPS_OR, x, reverse);
 }
 
 // Line 86-100: def bitwise_xor(self, x, reverse=False):
-static UOp* bitwise_xor_impl(UOp* self, void* x, bool reverse) {
+static UOp* bitwise_xor_impl(UOp* self, UOp* x, bool reverse) {
     check_dtype_impl(self);
     return binop_impl(self, OPS_XOR, x, reverse);
 }
 
 // Line 101-112: def idiv(self, x, reverse=False):
-static UOp* idiv_impl(UOp* self, void* x, bool reverse) {
+static UOp* idiv_impl(UOp* self, UOp* x, bool reverse) {
     return binop_impl(self, OPS_IDIV, x, reverse);
 }
 
 // Line 113: def mod(self, x, reverse=False): return self._binop(Ops.MOD, x, reverse)
-static UOp* mod_impl(UOp* self, void* x, bool reverse) {
+static UOp* mod_impl(UOp* self, UOp* x, bool reverse) {
     return binop_impl(self, OPS_MOD, x, reverse);
 }
 
 // Line 114: def sub(self, x, reverse=False):
 //   Create direct SUB op instead of mathematical transformation
-static UOp* sub_impl(UOp* self, void* x, bool reverse) {
-    UOp* x_fixed = ufix_impl(self, x);
+static UOp* sub_impl(UOp* self, UOp* x, bool reverse) {
+    UOp* x_fixed = ufix_impl(self, (void*)x);
     UOpArg arg = {0};
     
     if (reverse) {
@@ -181,16 +183,16 @@ static UOp* sub_impl(UOp* self, void* x, bool reverse) {
 }
 
 // Line 115: def div(self, x, reverse=False): return (self.ufix(x)*self.alu(Ops.RECIP)) if reverse else (self*self.ufix(x).alu(Ops.RECIP))
-static UOp* div_impl(UOp* self, void* x, bool reverse) {
+static UOp* div_impl(UOp* self, UOp* x, bool reverse) {
     if (reverse) {
         // x * self.reciprocal()
-        UOp* x_fixed = ufix_impl(self, x);
+        UOp* x_fixed = ufix_impl(self, (void*)x);
         UOp* recip_self = alu_impl(self, OPS_RECIP, NULL, 0);
         UOp* src[] = {recip_self};
         return alu_impl(x_fixed, OPS_MUL, src, 1);
     } else {
         // self * x.reciprocal()
-        UOp* x_fixed = ufix_impl(self, x);
+        UOp* x_fixed = ufix_impl(self, (void*)x);
         UOp* recip_x = alu_impl(x_fixed, OPS_RECIP, NULL, 0);
         UOp* src[] = {recip_x};
         return alu_impl(self, OPS_MUL, src, 1);
@@ -199,87 +201,87 @@ static UOp* div_impl(UOp* self, void* x, bool reverse) {
 
 // Line 139-142: Comparison operations
 // def __lt__(self, x): return self.alu(Ops.CMPLT, self.ufix(x))
-static UOp* lt_impl(UOp* self, void* x) {
-    UOp* x_fixed = ufix_impl(self, x);
+static UOp* lt_impl(UOp* self, UOp* x) {
+    UOp* x_fixed = ufix_impl(self, (void*)x);
     UOp* src[] = {x_fixed};
     return alu_impl(self, OPS_CMPLT, src, 1);
 }
 
 // def __gt__(self, x): return self.ufix(x).alu(Ops.CMPLT, self)
-static UOp* gt_impl(UOp* self, void* x) {
-    UOp* x_fixed = ufix_impl(self, x);
+static UOp* gt_impl(UOp* self, UOp* x) {
+    UOp* x_fixed = ufix_impl(self, (void*)x);
     UOp* src[] = {self};
     return alu_impl(x_fixed, OPS_CMPLT, src, 1);
 }
 
 // def __ge__(self, x): return (self < x).logical_not()
-static UOp* ge_impl(UOp* self, void* x) {
+static UOp* ge_impl(UOp* self, UOp* x) {
     UOp* lt_result = lt_impl(self, x);
     return logical_not_impl(lt_result);
 }
 
 // def __le__(self, x): return (self > x).logical_not()
-static UOp* le_impl(UOp* self, void* x) {
+static UOp* le_impl(UOp* self, UOp* x) {
     UOp* gt_result = gt_impl(self, x);
     return logical_not_impl(gt_result);
 }
 
 // Line 144-145: def ne(self, x): return self.alu(Ops.CMPNE, self.ufix(x))
-static UOp* ne_impl(UOp* self, void* x) {
-    UOp* x_fixed = ufix_impl(self, x);
+static UOp* ne_impl(UOp* self, UOp* x) {
+    UOp* x_fixed = ufix_impl(self, (void*)x);
     UOp* src[] = {x_fixed};
     return alu_impl(self, OPS_CMPNE, src, 1);
 }
 
 // def eq(self, x): return self.alu(Ops.CMPEQ, self.ufix(x))
-static UOp* eq_impl(UOp* self, void* x) {
-    UOp* x_fixed = ufix_impl(self, x);
+static UOp* eq_impl(UOp* self, UOp* x) {
+    UOp* x_fixed = ufix_impl(self, (void*)x);
     UOp* src[] = {x_fixed};
     return alu_impl(self, OPS_CMPEQ, src, 1);
 }
 
 // Line 149-150: Shift operations
-static UOp* lshift_impl(UOp* self, void* x, bool reverse) {
+static UOp* lshift_impl(UOp* self, UOp* x, bool reverse) {
     return binop_impl(self, OPS_SHL, x, reverse);
 }
 
-static UOp* rshift_impl(UOp* self, void* x, bool reverse) {
+static UOp* rshift_impl(UOp* self, UOp* x, bool reverse) {
     return binop_impl(self, OPS_SHR, x, reverse);
 }
 
 // Line 156-157: Min/max operations
 // def maximum(self, x): return self.alu(Ops.MAX, self.ufix(x))
-static UOp* maximum_impl(UOp* self, void* x) {
-    UOp* x_fixed = ufix_impl(self, x);
+static UOp* maximum_impl(UOp* self, UOp* x) {
+    UOp* x_fixed = ufix_impl(self, (void*)x);
     UOp* src[] = {x_fixed};
     return alu_impl(self, OPS_MAX, src, 1);
 }
 
 // def minimum(self, x): return -(-self).maximum(-x)
-static UOp* minimum_impl(UOp* self, void* x) {
+static UOp* minimum_impl(UOp* self, UOp* x) {
     UOp* neg_self = neg_impl(self);
-    UOp* x_fixed = ufix_impl(self, x);
+    UOp* x_fixed = ufix_impl(self, (void*)x);
     UOp* neg_x = neg_impl(x_fixed);
     UOp* max_result = maximum_impl(neg_self, neg_x);
     return neg_impl(max_result);
 }
 
 // Line 158-161: def where(self, x, y):
-static UOp* where_impl(UOp* self, void* x, void* y) {
+static UOp* where_impl(UOp* self, UOp* x, UOp* y) {
     // if type(self) is type(x): return self.alu(Ops.WHERE, x, x.ufix(y))
     // if type(self) is type(y): return self.alu(Ops.WHERE, y.ufix(x), y)
     // In C, we check if they're both UOps
-    UOp* x_uop = (UOp*)x;
-    UOp* y_uop = (UOp*)y;
+    UOp* x_uop = x;
+    UOp* y_uop = y;
     
     if (x_uop && x_uop->math_ops) {
         // self and x are both UOps
-        UOp* y_fixed = ufix_impl(x_uop, y);
+        UOp* y_fixed = ufix_impl(x_uop, (void*)y);
         UOp* src[] = {x_uop, y_fixed};
         return alu_impl(self, OPS_WHERE, src, 2);
     } else if (y_uop && y_uop->math_ops) {
         // self and y are both UOps
-        UOp* x_fixed = ufix_impl(y_uop, x);
+        UOp* x_fixed = ufix_impl(y_uop, (void*)x);
         UOp* src[] = {x_fixed, y_uop};
         return alu_impl(self, OPS_WHERE, src, 2);
     } else {
@@ -316,8 +318,8 @@ static UOp* exp2_impl(UOp* self) {
 }
 
 // Line 168: def pow(self, x): return self.alu(Ops.POW, self.ufix(x))
-static UOp* pow_impl(UOp* self, void* x) {
-    UOp* x_fixed = ufix_impl(self, x);
+static UOp* pow_impl(UOp* self, UOp* x) {
+    UOp* x_fixed = ufix_impl(self, (void*)x);
     UOp* src[] = {x_fixed};
     return alu_impl(self, OPS_POW, src, 1);
 }

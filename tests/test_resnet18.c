@@ -8,16 +8,11 @@ void tearDown(void) {
     // Clean up after each test if needed
 }
 
-void test_resnet18_placeholder(void) {
+TEST(test_resnet18_placeholder) {
     // This is a placeholder test for ResNet18
     // Will be expanded with actual ResNet18 tests
     TEST_ASSERT(1);
 }
 
-int main(void) {
-    UNITY_BEGIN();
-    
-    RUN_TEST(test_resnet18_placeholder);
-    
-    return UNITY_END();
-}
+// Auto-register all test functions and run them
+TEST_MAIN()

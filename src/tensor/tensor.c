@@ -56,12 +56,23 @@ int tgTensorCreate(tg_ctx_t ctx, tg_dtype dtype, const int64_t *shape, int rank,
 }
 int tgTensorFill(tg_tensor_t t, float v){ if(!t) return TG_ERR_INVALID; for(size_t i=0;i<t->numel;i++) t->data[i]=v; return TG_SUCCESS; }
 int tgTensorUpload(tg_tensor_t t, const void *data, size_t nbytes){
-  if(!t||!data) return TG_ERR_INVALID; if(nbytes!=t->numel*sizeof(float)) return TG_ERR_INVALID; memcpy(t->data,data,nbytes); return TG_SUCCESS;
+  if(!t||!data) return TG_ERR_INVALID;
+  if(nbytes!=t->numel*sizeof(float)) return TG_ERR_INVALID;
+  memcpy(t->data,data,nbytes);
+  return TG_SUCCESS;
 }
 int tgTensorDownload(tg_tensor_t t, void *data, size_t nbytes){
-  if(!t||!data) return TG_ERR_INVALID; if(nbytes!=t->numel*sizeof(float)) return TG_ERR_INVALID; memcpy(data,t->data,nbytes); return TG_SUCCESS;
+  if(!t||!data) return TG_ERR_INVALID;
+  if(nbytes!=t->numel*sizeof(float)) return TG_ERR_INVALID;
+  memcpy(data,t->data,nbytes);
+  return TG_SUCCESS;
 }
 int tgTensorDestroy(tg_tensor_t t){
-  if(!t) return TG_ERR_INVALID; free(t->grad); free(t->data); free(t->shape); free(t); return TG_SUCCESS;
+  if(!t) return TG_ERR_INVALID;
+  free(t->grad);
+  free(t->data);
+  free(t->shape);
+  free(t);
+  return TG_SUCCESS;
 }
 int tgTensorSetRequiresGrad(tg_tensor_t t, int r){ if(!t) return TG_ERR_INVALID; t->requires_grad = (r!=0); return TG_SUCCESS; }
