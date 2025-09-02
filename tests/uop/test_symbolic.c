@@ -16,20 +16,18 @@ void tearDown(void) {
 TEST(test_symbolic_variables) {
     
     // Test variable creation with range
-    UOpArg var_arg = {0};
-    var_arg.type = ARG_INT;
-    // Note: This test seems to expect a different interface, may need to be updated
-    UOp* var_x = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, &var_arg, "x");
+    UOp* var_x = uop_var_with_range("x", dtypes.int32, 10, 20);
     ASSERT(var_x != NULL);
     ASSERT(var_x->op == OPS_DEFINE_VAR);
-    ASSERT(uop_sym_infer(var_x) >= 10);
-    ASSERT(uop_sym_infer(var_x) <= 20);
+    TEST_ASSERT_EQUAL(10, uop_vmin(var_x));
+    TEST_ASSERT_EQUAL(20, uop_vmax(var_x));
     
     // Test variable arithmetic
     UOp* var_plus_5 = uop_add(var_x, uop_const(dtypes.int32, 5));
     ASSERT(var_plus_5 != NULL);
-    ASSERT(uop_sym_infer(var_plus_5) >= 15);
-    ASSERT(uop_sym_infer(var_plus_5) <= 25);
+    // sym_infer returns vmin, so we need to check vmin and vmax separately
+    TEST_ASSERT_EQUAL(15, uop_vmin(var_plus_5));
+    TEST_ASSERT_EQUAL(25, uop_vmax(var_plus_5));
     
     // Test variable comparison
     UOp* var_lt_15 = uop_lt(var_x, uop_const(dtypes.int32, 15));
@@ -64,43 +62,33 @@ TEST(test_advanced_symbolic) {
 TEST(test_vmin_vmax_propagation) {
     
     // Test variable with range
-    UOpArg var_arg = {0};
-    var_arg.type = ARG_INT;
-    // Note: This test expects a different interface
-    UOp* var = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, &var_arg, "x");
+    UOp* var = uop_var_with_range("x", dtypes.int32, 10, 20);
     ASSERT(var != NULL);
     
     // Test vmin/vmax after addition
     UOp* five = uop_const(dtypes.int32, 5);
     UOp* sum = uop_add(var, five);
     // vmin should be 15, vmax should be 25
-    ASSERT(uop_sym_infer(sum) >= 15);
-    ASSERT(uop_sym_infer(sum) <= 25);
+    TEST_ASSERT_EQUAL(15, uop_vmin(sum));
+    TEST_ASSERT_EQUAL(25, uop_vmax(sum));
     
     // Test vmin/vmax after multiplication
     UOp* two = uop_const(dtypes.int32, 2);
     UOp* prod = uop_mul(var, two);
     // vmin should be 20, vmax should be 40
-    ASSERT(uop_sym_infer(prod) >= 20);
-    ASSERT(uop_sym_infer(prod) <= 40);
+    TEST_ASSERT_EQUAL(20, uop_vmin(prod));
+    TEST_ASSERT_EQUAL(40, uop_vmax(prod));
 }
 
 TEST(test_symbolic_bounds) {
     
     // Test symbolic variable bounds propagation
-    UOpArg var_arg = {0};
-    var_arg.type = ARG_INT;
-    // Note: This test expects a string interface that's not in our structure
-    UOp* x = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, &var_arg, NULL);
+    UOp* x = uop_var_with_range("x", dtypes.int32, 0, 10);
     
-    // Set bounds on variable
     // x should have vmin=0, vmax=10
-    UOpArg bound_arg = {0};
-    bound_arg.type = ARG_INT;
-    // Note: This test expects a vec3i interface that's not in our structure
-    UOp* bounded_x = uop_new(OPS_BIND, dtypes.int32, &x, 1, &bound_arg, NULL);
-    
-    ASSERT(bounded_x != NULL);
+    ASSERT(x != NULL);
+    ASSERT(uop_vmin(x) == 0);
+    ASSERT(uop_vmax(x) == 10);
 }
 
 TEST(test_symbolic_resolution) {
@@ -114,10 +102,7 @@ TEST(test_symbolic_resolution) {
     ASSERT(resolved == true || resolved == false);  // Should resolve
     
     // Test variable comparison
-    UOpArg var_arg = {0};
-    var_arg.type = ARG_INT;
-    // Note: This test expects a string interface that's not in our structure
-    UOp* var = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, &var_arg, NULL);
+    UOp* var = uop_var_with_range("y", dtypes.int32, 0, 20);
     UOp* ten = uop_const(dtypes.int32, 10);
     UOp* cmp = uop_lt(var, ten);
     resolved = uop_resolve(cmp, false);
@@ -128,10 +113,7 @@ TEST(test_vmin_vmax_divmod) {
     fflush(stdout);
     
     // Test division bounds
-    UOpArg var_arg = {0};
-    var_arg.type = ARG_INT;
-    // Note: This test expects a string interface that's not in our structure
-    UOp* x = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, &var_arg, NULL);
+    UOp* x = uop_var_with_range("x", dtypes.int32, 0, 100);
     UOp* ten = uop_const(dtypes.int32, 10);
     UOp* div = uop_div(x, ten);
     
@@ -362,8 +344,13 @@ TEST(test_symbolic_mod_bounds) {
     UOp* var_y = uop_var_with_range("y", dtypes.int32, 1, 10);
     UOp* mod_result = uop_mod(var_x, var_y);
     
-    TEST_ASSERT_EQUAL(0, uop_vmin(mod_result));
-    TEST_ASSERT_EQUAL(9, uop_vmax(mod_result));  // max(y)-1
+    // Debug: print actual values
+    int actual_min = uop_vmin(mod_result);
+    int actual_max = uop_vmax(mod_result);
+    fprintf(stderr, "test_symbolic_mod_bounds: actual_min=%d, actual_max=%d, expected_min=0, expected_max=9\n", actual_min, actual_max);
+    
+    TEST_ASSERT_EQUAL(0, actual_min);
+    TEST_ASSERT_EQUAL(9, actual_max);  // max(y)-1
 }
 
 // Port of test_mod_remove from Python

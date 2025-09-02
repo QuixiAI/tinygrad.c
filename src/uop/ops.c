@@ -375,8 +375,13 @@ UOp* uop_bitcast(UOp* a, DType dtype) {
 
 // Greater than or equal - not (less than)
 UOp* uop_ge(UOp* a, UOp* b) {
+    // a >= b is logical_not(a < b)
     UOp* lt = uop_lt(a, b);
-    return uop_neg(lt);
+    // logical_not is implemented as ne(True)
+    UOp* true_val = uop_const(dtypes.bool_, 1.0);
+    UOp* src[] = {lt, true_val};
+    UOpArg arg = {0};
+    return uop_new(OPS_CMPNE, dtypes.bool_, src, 2, &arg, NULL);
 }
 
 UOp* uop_cmpne(UOp* a, UOp* b) {
@@ -735,8 +740,14 @@ int uop_vmin(UOp* uop) {
     if (uop->op == OPS_DEFINE_VAR) {
         // DEFINE_VAR needs special handling
         // In Python it's (name, min, max) tuple
-        // For testing purposes, use fixed range [10, 20] for symbolic test compatibility
-        return 10;
+        if (uop->arg.type == ARG_VAR) {
+            return uop->arg.var.vmin;
+        }
+        // Fallback for old-style ARG_INT encoding
+        if (uop->arg.type == ARG_INT) {
+            return uop->arg.int_data.i;
+        }
+        return 0;
     }
     
     // Line 513: CONST returns its value for both vmin and vmax
@@ -785,6 +796,124 @@ int uop_vmin(UOp* uop) {
         return s0_vmax < s1_vmin ? 1 : 0;
     }
     
+    // NEG operation: negation flips min/max
+    if (uop->op == OPS_NEG && uop->src_count == 1) {
+        return -uop_vmax(uop->src[0]);
+    }
+    
+    // MOD operation bounds - line 486-488 from Python
+    if (uop->op == OPS_MOD && uop->src_count == 2) {
+        int s0_vmin = uop_vmin(uop->src[0]);
+        int s0_vmax = uop_vmax(uop->src[0]);
+        int s1_vmin = uop_vmin(uop->src[1]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        
+        // if s1_vmin > 0: return (0, s1_vmax-1) if s0_vmin >= 0 else (-(s1_vmax-1), 0) if s0_vmax <= 0 else (-(s1_vmax-1), s1_vmax-1)
+        if (s1_vmin > 0) {
+            if (s0_vmin >= 0) {
+                // Special case: if dividend range is entirely within [0, divisor), result is just the dividend range
+                if (s0_vmax < s1_vmin) return s0_vmin;
+                return 0;  // vmin = 0
+            }
+            else if (s0_vmax <= 0) return -(s1_vmax - 1);  // vmin = -(s1_vmax-1)
+            else return -(s1_vmax - 1);  // vmin = -(s1_vmax-1)
+        }
+        // if s1_vmax < 0: return (0, -s1_vmin-1) if s0_vmin >= 0 else (-(-s1_vmin-1), 0) if s0_vmax <= 0 else (-(-s1_vmin-1), -s1_vmin-1)
+        if (s1_vmax < 0) {
+            if (s0_vmin >= 0) return 0;  // vmin = 0
+            else if (s0_vmax <= 0) return -(-s1_vmin - 1);  // vmin = -(-s1_vmin-1) = s1_vmin+1
+            else return -(-s1_vmin - 1);  // vmin = -(-s1_vmin-1) = s1_vmin+1
+        }
+        
+        return (int)dtypes_min(&uop->dtype);
+    }
+    
+    // MAX operation
+    if (uop->op == OPS_MAX && uop->src_count == 2) {
+        int s0_vmin = uop_vmin(uop->src[0]);
+        int s1_vmin = uop_vmin(uop->src[1]);
+        return s0_vmin > s1_vmin ? s0_vmin : s1_vmin;
+    }
+    
+    // Note: MIN is implemented as -MAX(-a, -b) in uop_min, so no need to handle here
+    
+    // WHERE operation: min of both branches
+    if (uop->op == OPS_WHERE && uop->src_count == 3) {
+        int true_vmin = uop_vmin(uop->src[1]);
+        int false_vmin = uop_vmin(uop->src[2]);
+        return true_vmin < false_vmin ? true_vmin : false_vmin;
+    }
+    
+    // SHL (left shift)
+    if (uop->op == OPS_SHL && uop->src_count == 2) {
+        int s0_vmin = uop_vmin(uop->src[0]);
+        int s0_vmax = uop_vmax(uop->src[0]);
+        int s1_vmin = uop_vmin(uop->src[1]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        
+        if (s1_vmin >= 0 && s1_vmax < 32) {
+            // Safe shift range
+            if (s0_vmin >= 0) {
+                return s0_vmin << s1_vmin;
+            } else if (s0_vmax < 0) {
+                return s0_vmin << s1_vmax;
+            } else {
+                // Mixed sign, min could be very negative
+                return s0_vmin << s1_vmax;
+            }
+        }
+        return (int)dtypes_min(&uop->dtype);
+    }
+    
+    // SHR (right shift)
+    if (uop->op == OPS_SHR && uop->src_count == 2) {
+        int s0_vmin = uop_vmin(uop->src[0]);
+        int s0_vmax = uop_vmax(uop->src[0]);
+        int s1_vmin = uop_vmin(uop->src[1]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        
+        if (s1_vmin >= 0 && s1_vmax < 32) {
+            if (s0_vmin >= 0) {
+                return s0_vmin >> s1_vmax;
+            } else {
+                return s0_vmin >> s1_vmin;
+            }
+        }
+        return 0;
+    }
+    
+    // AND operation with positive constant
+    if (uop->op == OPS_AND && uop->src_count == 2) {
+        int s1_vmin = uop_vmin(uop->src[1]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        
+        // AND with positive constant: result is 0 to constant
+        if (s1_vmin == s1_vmax && s1_vmin >= 0) {
+            return 0;
+        }
+        // General case
+        return 0;
+    }
+    
+    // CMPNE (not equal)
+    if (uop->op == OPS_CMPNE && uop->src_count == 2) {
+        int s0_vmin = uop_vmin(uop->src[0]);
+        int s0_vmax = uop_vmax(uop->src[0]);
+        int s1_vmin = uop_vmin(uop->src[1]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        
+        // If ranges don't overlap, always not equal
+        if (s0_vmax < s1_vmin || s0_vmin > s1_vmax) {
+            return 1;
+        }
+        // If both are the same constant, always equal (ne returns 0)
+        if (s0_vmin == s0_vmax && s1_vmin == s1_vmax && s0_vmin == s1_vmin) {
+            return 0;
+        }
+        // Otherwise can be either
+        return 0;
+    }
+    
     // Line 489-497: IDIV bounds calculation
     if (uop->op == OPS_IDIV && uop->src_count == 2) {
         int s0_vmin = uop_vmin(uop->src[0]);
@@ -824,8 +953,14 @@ int uop_vmax(UOp* uop) {
     if (uop->op == OPS_DEFINE_VAR) {
         // DEFINE_VAR needs special handling
         // In Python it's (name, min, max) tuple
-        // For testing purposes, use fixed range [10, 20] for symbolic test compatibility
-        return 20;
+        if (uop->arg.type == ARG_VAR) {
+            return uop->arg.var.vmax;
+        }
+        // Fallback for old-style ARG_INT encoding (assume max=min)
+        if (uop->arg.type == ARG_INT) {
+            return uop->arg.int_data.i;
+        }
+        return 0;
     }
     
     // Line 513: CONST returns its value for both vmin and vmax
@@ -872,6 +1007,124 @@ int uop_vmax(UOp* uop) {
         int s0_vmin = uop_vmin(uop->src[0]);
         int s1_vmax = uop_vmax(uop->src[1]);
         return s0_vmin < s1_vmax ? 1 : 0;
+    }
+    
+    // NEG operation: negation flips min/max
+    if (uop->op == OPS_NEG && uop->src_count == 1) {
+        return -uop_vmin(uop->src[0]);
+    }
+    
+    // MOD operation bounds - line 486-488 from Python
+    if (uop->op == OPS_MOD && uop->src_count == 2) {
+        int s0_vmin = uop_vmin(uop->src[0]);
+        int s0_vmax = uop_vmax(uop->src[0]);
+        int s1_vmin = uop_vmin(uop->src[1]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        
+        // if s1_vmin > 0: return (0, s1_vmax-1) if s0_vmin >= 0 else (-(s1_vmax-1), 0) if s0_vmax <= 0 else (-(s1_vmax-1), s1_vmax-1)
+        if (s1_vmin > 0) {
+            if (s0_vmin >= 0) {
+                // Special case: if dividend range is entirely within [0, divisor), result is just the dividend range
+                if (s0_vmax < s1_vmin) return s0_vmax;
+                return s1_vmax - 1;  // vmax = s1_vmax-1
+            }
+            else if (s0_vmax <= 0) return 0;  // vmax = 0
+            else return s1_vmax - 1;  // vmax = s1_vmax-1
+        }
+        // if s1_vmax < 0: return (0, -s1_vmin-1) if s0_vmin >= 0 else (-(-s1_vmin-1), 0) if s0_vmax <= 0 else (-(-s1_vmin-1), -s1_vmin-1)
+        if (s1_vmax < 0) {
+            if (s0_vmin >= 0) return -s1_vmin - 1;  // vmax = -s1_vmin-1
+            else if (s0_vmax <= 0) return 0;  // vmax = 0
+            else return -s1_vmin - 1;  // vmax = -s1_vmin-1
+        }
+        
+        return (int)dtypes_max(&uop->dtype);
+    }
+    
+    // MAX operation
+    if (uop->op == OPS_MAX && uop->src_count == 2) {
+        int s0_vmax = uop_vmax(uop->src[0]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        return s0_vmax > s1_vmax ? s0_vmax : s1_vmax;
+    }
+    
+    // Note: MIN is implemented as -MAX(-a, -b) in uop_min, so no need to handle here
+    
+    // WHERE operation: max of both branches
+    if (uop->op == OPS_WHERE && uop->src_count == 3) {
+        int true_vmax = uop_vmax(uop->src[1]);
+        int false_vmax = uop_vmax(uop->src[2]);
+        return true_vmax > false_vmax ? true_vmax : false_vmax;
+    }
+    
+    // SHL (left shift)
+    if (uop->op == OPS_SHL && uop->src_count == 2) {
+        int s0_vmin = uop_vmin(uop->src[0]);
+        int s0_vmax = uop_vmax(uop->src[0]);
+        int s1_vmin = uop_vmin(uop->src[1]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        
+        if (s1_vmin >= 0 && s1_vmax < 32) {
+            // Safe shift range
+            if (s0_vmax >= 0) {
+                return s0_vmax << s1_vmax;
+            } else if (s0_vmin < 0) {
+                return s0_vmax << s1_vmin;
+            } else {
+                // Mixed sign
+                return s0_vmax << s1_vmax;
+            }
+        }
+        return (int)dtypes_max(&uop->dtype);
+    }
+    
+    // SHR (right shift)
+    if (uop->op == OPS_SHR && uop->src_count == 2) {
+        int s0_vmax = uop_vmax(uop->src[0]);
+        int s1_vmin = uop_vmin(uop->src[1]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        
+        if (s1_vmin >= 0 && s1_vmax < 32) {
+            if (s0_vmax >= 0) {
+                return s0_vmax >> s1_vmin;
+            } else {
+                // Arithmetic right shift of negative number
+                return -1;  // Sign extension fills with 1s
+            }
+        }
+        return (int)dtypes_max(&uop->dtype);
+    }
+    
+    // AND operation with positive constant
+    if (uop->op == OPS_AND && uop->src_count == 2) {
+        int s1_vmin = uop_vmin(uop->src[1]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        
+        // AND with positive constant: result is 0 to constant
+        if (s1_vmin == s1_vmax && s1_vmin >= 0) {
+            return s1_vmin;  // Maximum is the constant itself
+        }
+        // General case: could be all bits set
+        return s1_vmax >= 0 ? s1_vmax : -1;
+    }
+    
+    // CMPNE (not equal)
+    if (uop->op == OPS_CMPNE && uop->src_count == 2) {
+        int s0_vmin = uop_vmin(uop->src[0]);
+        int s0_vmax = uop_vmax(uop->src[0]);
+        int s1_vmin = uop_vmin(uop->src[1]);
+        int s1_vmax = uop_vmax(uop->src[1]);
+        
+        // If ranges don't overlap, always not equal
+        if (s0_vmax < s1_vmin || s0_vmin > s1_vmax) {
+            return 1;
+        }
+        // If both are the same constant, always equal (ne returns 0)
+        if (s0_vmin == s0_vmax && s1_vmin == s1_vmax && s0_vmin == s1_vmin) {
+            return 0;
+        }
+        // Otherwise can be either
+        return 1;
     }
     
     // Line 489-497: IDIV bounds calculation
@@ -1203,6 +1456,23 @@ bool upat_match(UPat* pattern, UOp* uop) {
 // upat_free is now defined in upat.c
 
 // Line 802-900: Execution
+// Helper functions for cdiv and cmod from Python
+static int cdiv_impl(int x, int y) {
+    // Python: cdiv(x,y) = abs(x)//abs(y)*(1,-1)[x*y<0] if y != 0 else 0
+    if (y == 0) return 0;
+    int abs_x = abs(x);
+    int abs_y = abs(y);
+    int result = abs_x / abs_y;
+    // Apply sign: negative if x and y have different signs
+    if ((x < 0) != (y < 0)) result = -result;
+    return result;
+}
+
+static int cmod_impl(int x, int y) {
+    // Python: cmod(x,y) = x - cdiv(x,y)*y
+    return x - cdiv_impl(x, y) * y;
+}
+
 // Line 802: def exec_alu(op:Ops, dtype:DType, args:tuple[ConstType, ...]):
 double exec_alu(Ops op, DType dtype, double* args, size_t arg_count) {
     // Execute ALU operation
@@ -1218,12 +1488,39 @@ double exec_alu(Ops op, DType dtype, double* args, size_t arg_count) {
         double a = args[0];
         switch (op) {
             case OPS_NEG: result = -a; break;
-            case OPS_EXP2: result = pow(2.0, a); break;
-            case OPS_LOG2: result = log2(a); break;
-            case OPS_SIN: result = sin(a); break;
-            case OPS_SQRT: result = sqrt(a); break;
-            case OPS_RECIP: result = 1.0 / a; break;
-            default: result = 0.0; break;
+            case OPS_EXP2: {
+                // Python safe_exp2: try 2**x except OverflowError return inf
+                if (a > 1024) result = INFINITY;
+                else if (a < -1024) result = 0.0;
+                else result = pow(2.0, a);
+                break;
+            }
+            case OPS_LOG2: {
+                // Python: math.log2(x) if x > 0 else -math.inf if x == 0 else math.nan
+                if (a > 0) result = log2(a);
+                else if (a == 0) result = -INFINITY;
+                else result = NAN;
+                break;
+            }
+            case OPS_SIN: {
+                // Python: math.sin(x) if not math.isinf(x) else math.nan
+                if (isinf(a)) result = NAN;
+                else result = sin(a);
+                break;
+            }
+            case OPS_SQRT: {
+                // Python: math.sqrt(x) if x >= 0 else math.nan
+                if (a >= 0) result = sqrt(a);
+                else result = NAN;
+                break;
+            }
+            case OPS_RECIP: {
+                // Python: 1/x if x != 0 else math.copysign(math.inf, x)
+                if (a != 0) result = 1.0 / a;
+                else result = (a >= 0) ? INFINITY : -INFINITY;
+                break;
+            }
+            default: result = a; break; // Passthrough for unknown ops
         }
     } else if (arg_count == 2) {
         // Binary operations
@@ -1233,31 +1530,88 @@ double exec_alu(Ops op, DType dtype, double* args, size_t arg_count) {
             case OPS_ADD: result = a + b; break;
             case OPS_SUB: result = a - b; break;
             case OPS_MUL: result = a * b; break;
-            case OPS_FDIV: result = a / b; break;
-            case OPS_IDIV: result = trunc(a / b); break;  // Integer division with truncation toward zero
-            case OPS_MAX: result = a > b ? a : b; break;
-            case OPS_MOD: result = fmod(a, b); break;
-            case OPS_CMPLT: result = a < b ? 1.0 : 0.0; break;
-            case OPS_CMPEQ: result = a == b ? 1.0 : 0.0; break;
-            case OPS_CMPNE: result = a != b ? 1.0 : 0.0; break;
-            case OPS_XOR: result = (int)a ^ (int)b; break;
-            case OPS_AND: result = (int)a & (int)b; break;
-            case OPS_OR: result = (int)a | (int)b; break;
+            case OPS_FDIV: {
+                // Regular floating point division
+                if (b == 0) result = (a >= 0) ? INFINITY : -INFINITY;
+                else result = a / b;
+                break;
+            }
+            case OPS_IDIV: {
+                // Integer division using cdiv (ceiling division toward zero)
+                // Convert to int, apply cdiv, convert back
+                if (dtypes_is_int(&dtype)) {
+                    result = (double)cdiv_impl((int)a, (int)b);
+                } else {
+                    // For float types, use truncating division
+                    if (b == 0) result = (a >= 0) ? INFINITY : -INFINITY;
+                    else result = trunc(a / b);
+                }
+                break;
+            }
+            case OPS_MAX: result = (a > b) ? a : b; break;
+            case OPS_MOD: {
+                // Use cmod for integer types, fmod for float types
+                if (dtypes_is_int(&dtype)) {
+                    result = (double)cmod_impl((int)a, (int)b);
+                } else {
+                    result = fmod(a, b);
+                }
+                break;
+            }
+            case OPS_CMPLT: result = (a < b) ? 1.0 : 0.0; break;
+            case OPS_CMPEQ: result = (a == b) ? 1.0 : 0.0; break;
+            case OPS_CMPNE: result = (a != b) ? 1.0 : 0.0; break;
+            case OPS_XOR: {
+                // Bitwise XOR for integers, logical XOR for bools
+                if (dtype_eq(&dtype, &dtypes.bool_)) {
+                    result = ((a != 0) != (b != 0)) ? 1.0 : 0.0;
+                } else {
+                    result = (double)((int)a ^ (int)b);
+                }
+                break;
+            }
+            case OPS_AND: {
+                // Bitwise AND for integers, logical AND for bools
+                if (dtype_eq(&dtype, &dtypes.bool_)) {
+                    result = ((a != 0) && (b != 0)) ? 1.0 : 0.0;
+                } else {
+                    result = (double)((int)a & (int)b);
+                }
+                break;
+            }
+            case OPS_OR: {
+                // Bitwise OR for integers, logical OR for bools
+                if (dtype_eq(&dtype, &dtypes.bool_)) {
+                    result = ((a != 0) || (b != 0)) ? 1.0 : 0.0;
+                } else {
+                    result = (double)((int)a | (int)b);
+                }
+                break;
+            }
             case OPS_SHL: {
+                int ia = (int)a;
                 int shift = (int)b;
-                if (shift < 0) result = 0.0;  // Python raises ValueError, we return 0
-                else if (shift >= 32) result = 0.0;  // Shift beyond width
-                else result = ((int)a) << shift;
+                if (shift < 0 || shift >= 32) result = 0.0;  // 32-bit shift
+                else result = (double)(ia << shift);
                 break;
             }
             case OPS_SHR: {
+                int ia = (int)a;
                 int shift = (int)b;
-                if (shift < 0) result = 0.0;  // Python raises ValueError, we return 0
-                else if (shift >= 32) result = 0.0;  // Shift beyond width
-                else result = ((int)a) >> shift;
+                if (shift < 0 || shift >= 32) result = 0.0;  // 32-bit shift
+                else result = (double)(ia >> shift);
                 break;
             }
-            default: result = 0.0; break;
+            case OPS_POW: {
+                // Python safe_pow
+                result = pow(a, b);
+                // Handle special cases
+                if (isnan(result) || (a == 0 && b < 0)) {
+                    result = INFINITY;
+                }
+                break;
+            }
+            default: result = a; break; // Passthrough for unknown ops
         }
     } else if (arg_count == 3) {
         // Ternary operations
@@ -1265,9 +1619,9 @@ double exec_alu(Ops op, DType dtype, double* args, size_t arg_count) {
         double b = args[1];
         double c = args[2];
         switch (op) {
-            case OPS_WHERE: result = a != 0.0 ? b : c; break;
-            case OPS_MULACC: result = a * b + c; break;
-            default: result = 0.0; break;
+            case OPS_WHERE: result = (a != 0.0) ? b : c; break;
+            case OPS_MULACC: result = (a * b) + c; break;
+            default: result = a; break; // Passthrough for unknown ops
         }
     }
     
@@ -1358,9 +1712,12 @@ UOp* uop_var(const char* name, DType dtype) {
 
 UOp* uop_var_with_range(const char* name, DType dtype, int min_val, int max_val) {
     // Create a variable with range constraints
+    // In Python: DEFINE_VAR with arg=(name, vmin, vmax)
     UOpArg arg = {0};
-    arg.type = ARG_INT;
-    arg.int_data.i = min_val;  // Simplified: just store min for now
+    arg.type = ARG_VAR;
+    arg.var.vmin = min_val;
+    arg.var.vmax = max_val;
+    // Store name if needed (not currently used)
     return uop_new(OPS_DEFINE_VAR, dtype, NULL, 0, &arg, NULL);
 }
 

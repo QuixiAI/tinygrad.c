@@ -2,6 +2,12 @@
 
 void setUp(void) {
     // Initialize test fixtures if needed
+    static int initialized = 0;
+    if (!initialized) {
+        dtypes_init();
+        uop_ops_init();
+        initialized = 1;
+    }
 }
 
 void tearDown(void) {
