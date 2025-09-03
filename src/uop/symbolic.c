@@ -169,28 +169,26 @@ static struct PatternMatcher symbolic_simple_matcher = {
 
 // Phase 2: builds on phase 1, includes deeper rules
 
-static void split_uop(UOp* x, Ops sep, UOp*** result, size_t* count) {
+void split_uop(UOp* x, Ops sep, UOp*** result, int* count) {
     if (x->op == sep) {
-        size_t total_count = 0;
+        int total_count = 0;
         for (size_t i = 0; i < x->src_count; i++) {
-            UOp* sub_result = NULL;
-            size_t sub_count = 0;
-            UOp** sub_result_ptr = &sub_result;
-            split_uop(x->src[i], sep, &sub_result_ptr, &sub_count);
+            UOp** sub_result = NULL;
+            int sub_count = 0;
+            split_uop(x->src[i], sep, &sub_result, &sub_count);
             total_count += sub_count;
         }
         
         *count = total_count;
         *result = malloc(total_count * sizeof(UOp*));
         
-        size_t idx = 0;
+        int idx = 0;
         for (size_t i = 0; i < x->src_count; i++) {
-            UOp* sub_result = NULL;
-            size_t sub_count = 0;
-            UOp** sub_result_ptr = &sub_result;
-            split_uop(x->src[i], sep, &sub_result_ptr, &sub_count);
-            for (size_t j = 0; j < sub_count; j++) {
-                (*result)[idx++] = uop_new(x->op, x->dtype, NULL, 0, NULL, NULL);  // Simplified assignment
+            UOp** sub_result = NULL;
+            int sub_count = 0;
+            split_uop(x->src[i], sep, &sub_result, &sub_count);
+            for (int j = 0; j < sub_count; j++) {
+                (*result)[idx++] = sub_result[j];
             }
             free(sub_result);
         }
@@ -219,14 +217,14 @@ static UOp* canonicalize_simplex(UOp* X) {
     // Variable removed - was unused
     size_t count = 0;
     UOp** split = NULL;
-    size_t split_count = 0;
+    int split_count = 0;
     
     split_uop(X, OPS_ADD, &split, &split_count);
     
     bool changed = false;
     UOp** ret = malloc(split_count * sizeof(UOp*));
     
-    for (size_t i = 0; i < split_count; i++) {
+    for (int i = 0; i < split_count; i++) {
         UOp* u = split[i];
         if (u->op == OPS_MUL && u->src_count == 2 && u->src[1]->op == OPS_CONST) {
             UOp* const_op = u->src[1];
@@ -431,7 +429,7 @@ static UOp** parse_valid(UOp* valid, size_t* bound_count) {
     return NULL;
 }
 
-static UOp* uop_given_valid(UOp* valid, UOp* uop) {
+UOp* uop_given_valid(UOp* valid, UOp* uop) {
     // return None if valid is always False, otherwise the simplified uop (might be the same as input)
     
     // first, parse valid into {expr: (lower_bound, upper_bound)}
@@ -481,7 +479,7 @@ static int _valid_priority(UOp* v, UOp** valids, size_t valid_count) {
     return 0;
 }
 
-static UOp* simplify_valid(UOp* valid) {
+UOp* simplify_valid(UOp* valid) {
     size_t something_changed = 0;
     
     size_t valid_count = 0;
@@ -821,6 +819,17 @@ UOp* symbolic_ssimplify(UOp* uop) {
     // Apply phase 3 patterns (very complex patterns)
     // For now, return original uop
     return uop_ref(uop);
+}
+
+// ******** Helper functions for views_to_indexed_uops ********
+
+// Make existing static functions non-static and update signature
+// Update the existing split_uop function at line 172 to be non-static with int* count
+// We'll modify the existing implementation instead of adding a duplicate
+
+// Helper function to create sint_to_uop (converts sint to UOp)
+UOp* sint_to_uop(int64_t val) {
+    return uop_const(dtypes.int_, (double)val);
 }
 
 #ifdef __cplusplus

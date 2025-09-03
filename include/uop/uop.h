@@ -179,9 +179,10 @@ typedef struct UOpArg {
             void* st;  // ShapeTracker*
         } st_data;
         struct {
-            int vmin;
-            int vmax;
-        } var;  // For variable ranges
+            char* name;  // Variable name - Python line 422
+            int64_t vmin;  // Variable min value - Python line 422
+            int64_t vmax;  // Variable max value - Python line 422
+        } var;  // For DEFINE_VAR arguments
     };
 } UOpArg;
 
@@ -225,6 +226,10 @@ typedef struct UOp {
     UOpArg arg;
     const MathTraitOps* math_ops;
     int ref_count;
+    // Symbolic range tracking - Python line 472-474
+    int64_t vmin;  // minimum value in symbolic range
+    int64_t vmax;  // maximum value in symbolic range
+    bool vmin_vmax_valid;  // flag to indicate if vmin/vmax are computed
 } UOp;
 
 // Pattern matching structures
@@ -358,6 +363,7 @@ UOp* uop_view(UOp* buf, struct ShapeTracker* st);
 UOp* uop_index(UOp* buf, UOp* idx);
 UOp* uop_var(const char* name, DType dtype);
 UOp* uop_var_with_range(const char* name, DType dtype, int min_val, int max_val);
+UOp* uop_range(UOp* n, int idx);
 UOp* uop_buffer(int64_t* shape, size_t shape_count, DType dtype);
 UOp* uop_reduce(UOp* src, Ops reduce_op);
 UOp** uop_toposort(UOp* root, size_t* count);
@@ -462,6 +468,7 @@ UOp* symbolic_simplify(UOp* uop);
 UOp* symbolic_ssimplify(UOp* uop);
 
 // Variable creation and binding functions
+UOp* uop_variable(const char* name, int64_t min_val, int64_t max_val, DType dtype);
 UOp* uop_create_variable(int min_val, int max_val);
 UOp* uop_bind(UOp* var, UOp* value);
 

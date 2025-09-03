@@ -98,6 +98,11 @@ UOp* uop_new(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void
     }
     uop->math_ops = &math_ops;  // Set this once, after all initialization
     
+    // Initialize vmin/vmax to invalid state
+    uop->vmin_vmax_valid = false;
+    uop->vmin = 0;
+    uop->vmax = 0;
+    
     // Add to cache
     uop_cache_put(uop);
     return uop;
@@ -730,416 +735,244 @@ UOp* uop_ssimplify(UOp* uop) {
     return uop_simplify(uop);
 }
 
-// Line 572-620: Symbolic operations
-// Line 572: def sym_infer(self) -> Optional[int]:
-// Helper functions for vmin/vmax
-int uop_vmin(UOp* uop) {
-    if (!uop) return 0;
+// Line 472-518: vmin/vmax calculation
+// Python: @functools.cached_property def _min_max(self)
+static void compute_min_max(UOp* uop) {
+    if (!uop || uop->vmin_vmax_valid) return;  // Already computed
     
-    // Line 507: DEFINE_VAR returns arg[1] as vmin
-    if (uop->op == OPS_DEFINE_VAR) {
-        // DEFINE_VAR needs special handling
-        // In Python it's (name, min, max) tuple
-        if (uop->arg.type == ARG_VAR) {
-            return uop->arg.var.vmin;
-        }
-        // Fallback for old-style ARG_INT encoding
-        if (uop->arg.type == ARG_INT) {
-            return uop->arg.int_data.i;
-        }
-        return 0;
+    // Line 507: DEFINE_VAR returns arg[1] as vmin, arg[2] as vmax
+    if (uop->op == OPS_DEFINE_VAR && uop->arg.type == ARG_VAR) {
+        uop->vmin = uop->arg.var.vmin;
+        uop->vmax = uop->arg.var.vmax;
+        uop->vmin_vmax_valid = true;
+        return;
     }
     
     // Line 513: CONST returns its value for both vmin and vmax
-    if (uop->op == OPS_CONST) {
-        if (uop->arg.type == ARG_CONST) {
-            return (int)uop->arg.const_data.const_value;
+    if (uop->op == OPS_CONST && uop->arg.type == ARG_CONST) {
+        int64_t val = (int64_t)uop->arg.const_data.const_value;
+        uop->vmin = val;
+        uop->vmax = val;
+        uop->vmin_vmax_valid = true;
+        return;
+    }
+    
+    // Line 508: RANGE returns 0, (src[0]-1).vmax
+    if (uop->op == OPS_RANGE && uop->src_count > 0) {
+        compute_min_max(uop->src[0]);
+        uop->vmin = 0;
+        uop->vmax = uop->src[0]->vmax - 1;
+        uop->vmin_vmax_valid = true;
+        return;
+    }
+    
+    // Line 509: BIND returns src[0]._min_max (ignore the bound value)
+    if (uop->op == OPS_BIND && uop->src_count > 0) {
+        compute_min_max(uop->src[0]);
+        uop->vmin = uop->src[0]->vmin;
+        uop->vmax = uop->src[0]->vmax;
+        uop->vmin_vmax_valid = true;
+        return;
+    }
+    
+    // Line 477-503: Binary operations for non-float dtypes
+    if (uop->src_count == 2 && (uop->op == OPS_ADD || uop->op == OPS_SUB || 
+                                 uop->op == OPS_MUL || uop->op == OPS_MAX ||
+                                 uop->op == OPS_MOD || uop->op == OPS_IDIV ||
+                                 uop->op == OPS_SHL || uop->op == OPS_SHR ||
+                                 uop->op == OPS_CMPLT || uop->op == OPS_CMPNE ||
+                                 uop->op == OPS_AND)) {
+        // Compute min/max for sources first
+        compute_min_max(uop->src[0]);
+        compute_min_max(uop->src[1]);
+        
+        int64_t s0_vmin = uop->src[0]->vmin;
+        int64_t s0_vmax = uop->src[0]->vmax;
+        int64_t s1_vmin = uop->src[1]->vmin;
+        int64_t s1_vmax = uop->src[1]->vmax;
+        
+        // Line 479: ADD
+        if (uop->op == OPS_ADD) {
+            uop->vmin = s0_vmin + s1_vmin;
+            uop->vmax = s0_vmax + s1_vmax;
         }
-        if (uop->arg.type == ARG_INT) {
-            return uop->arg.int_data.i;
+        // Line 480: SUB
+        else if (uop->op == OPS_SUB) {
+            uop->vmin = s0_vmin - s1_vmax;
+            uop->vmax = s0_vmax - s1_vmin;
         }
-    }
-    
-    // Line 479: ADD returns sum of vmins
-    if (uop->op == OPS_ADD && uop->src_count == 2) {
-        return uop_vmin(uop->src[0]) + uop_vmin(uop->src[1]);
-    }
-    
-    // Line 480: SUB returns s0_vmin - s1_vmax
-    if (uop->op == OPS_SUB && uop->src_count == 2) {
-        return uop_vmin(uop->src[0]) - uop_vmax(uop->src[1]);
-    }
-    
-    // Line 482: MUL returns min of all products
-    if (uop->op == OPS_MUL && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        int v1 = s0_vmin * s1_vmin;
-        int v2 = s0_vmin * s1_vmax;
-        int v3 = s0_vmax * s1_vmin;
-        int v4 = s0_vmax * s1_vmax;
-        
-        int min = v1;
-        if (v2 < min) min = v2;
-        if (v3 < min) min = v3;
-        if (v4 < min) min = v4;
-        return min;
-    }
-    
-    // Line 499: CMPLT returns (s0_vmax < s1_vmin)
-    if (uop->op == OPS_CMPLT && uop->src_count == 2) {
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        return s0_vmax < s1_vmin ? 1 : 0;
-    }
-    
-    // NEG operation: negation flips min/max
-    if (uop->op == OPS_NEG && uop->src_count == 1) {
-        return -uop_vmax(uop->src[0]);
-    }
-    
-    // MOD operation bounds - line 486-488 from Python
-    if (uop->op == OPS_MOD && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // if s1_vmin > 0: return (0, s1_vmax-1) if s0_vmin >= 0 else (-(s1_vmax-1), 0) if s0_vmax <= 0 else (-(s1_vmax-1), s1_vmax-1)
-        if (s1_vmin > 0) {
-            if (s0_vmin >= 0) {
-                // Special case: if dividend range is entirely within [0, divisor), result is just the dividend range
-                if (s0_vmax < s1_vmin) return s0_vmin;
-                return 0;  // vmin = 0
+        // Line 482: MUL - min/max of all products
+        else if (uop->op == OPS_MUL) {
+            int64_t vals[4] = {
+                s0_vmin * s1_vmin,
+                s0_vmin * s1_vmax,
+                s0_vmax * s1_vmin,
+                s0_vmax * s1_vmax
+            };
+            uop->vmin = vals[0];
+            uop->vmax = vals[0];
+            for (int i = 1; i < 4; i++) {
+                if (vals[i] < uop->vmin) uop->vmin = vals[i];
+                if (vals[i] > uop->vmax) uop->vmax = vals[i];
             }
-            else if (s0_vmax <= 0) return -(s1_vmax - 1);  // vmin = -(s1_vmax-1)
-            else return -(s1_vmax - 1);  // vmin = -(s1_vmax-1)
         }
-        // if s1_vmax < 0: return (0, -s1_vmin-1) if s0_vmin >= 0 else (-(-s1_vmin-1), 0) if s0_vmax <= 0 else (-(-s1_vmin-1), -s1_vmin-1)
-        if (s1_vmax < 0) {
-            if (s0_vmin >= 0) return 0;  // vmin = 0
-            else if (s0_vmax <= 0) return -(-s1_vmin - 1);  // vmin = -(-s1_vmin-1) = s1_vmin+1
-            else return -(-s1_vmin - 1);  // vmin = -(-s1_vmin-1) = s1_vmin+1
+        // Line 498: MAX
+        else if (uop->op == OPS_MAX) {
+            uop->vmin = (s0_vmin > s1_vmin) ? s0_vmin : s1_vmin;
+            uop->vmax = (s0_vmax > s1_vmax) ? s0_vmax : s1_vmax;
+        }
+        // Line 499: CMPLT returns boolean range
+        else if (uop->op == OPS_CMPLT) {
+            uop->vmin = (s0_vmax < s1_vmin) ? 1 : 0;
+            uop->vmax = (s0_vmin < s1_vmax) ? 1 : 0;
+        }
+        // Line 500: CMPNE
+        else if (uop->op == OPS_CMPNE) {
+            uop->vmin = ((s0_vmax < s1_vmin) || (s1_vmax < s0_vmin)) ? 1 : 0;
+            uop->vmax = (s0_vmin == s0_vmax && s0_vmax == s1_vmin && s1_vmin == s1_vmax) ? 0 : 1;
+        }
+        // Line 481: AND with positive constant (limited support)
+        else if (uop->op == OPS_AND && s1_vmin == s1_vmax && s0_vmin >= 0 && s1_vmin >= 0) {
+            // Python: return min(0, s0_vmin), min(s0_vmax, s1_vmax)
+            // Since s0_vmin >= 0, min(0, s0_vmin) is always 0
+            uop->vmin = 0;
+            uop->vmax = (s0_vmax < s1_vmax) ? s0_vmax : s1_vmax;  // min(s0_vmax, s1_vmax)
+        }
+        // Line 484: SHL on consts only
+        else if (uop->op == OPS_SHL && s1_vmin == s1_vmax) {
+            uop->vmin = s0_vmin << s1_vmin;
+            uop->vmax = s0_vmax << s1_vmin;
+        }
+        // Line 485: SHR on consts only
+        else if (uop->op == OPS_SHR && s1_vmin == s1_vmax) {
+            uop->vmin = s0_vmin >> s1_vmin;
+            uop->vmax = s0_vmax >> s1_vmin;
+        }
+        // Line 486-488: MOD operation
+        else if (uop->op == OPS_MOD) {
+            if (s1_vmin > 0) {
+                if (s0_vmin >= 0) {
+                    // Special case: if range is entirely within [0, divisor), result is just the range
+                    if (s0_vmax < s1_vmin) {
+                        uop->vmin = s0_vmin;
+                        uop->vmax = s0_vmax;
+                    } else {
+                        uop->vmin = 0;
+                        uop->vmax = s1_vmax - 1;
+                    }
+                } else if (s0_vmax <= 0) {
+                    uop->vmin = -(s1_vmax - 1);
+                    uop->vmax = 0;
+                } else {
+                    uop->vmin = -(s1_vmax - 1);
+                    uop->vmax = s1_vmax - 1;
+                }
+            } else if (s1_vmax < 0) {
+                if (s0_vmin >= 0) {
+                    uop->vmin = 0;
+                    uop->vmax = -s1_vmin - 1;
+                } else if (s0_vmax <= 0) {
+                    uop->vmin = -(-s1_vmin - 1);
+                    uop->vmax = 0;
+                } else {
+                    uop->vmin = -(-s1_vmin - 1);
+                    uop->vmax = -s1_vmin - 1;
+                }
+            } else {
+                uop->vmin = INT64_MIN;
+                uop->vmax = INT64_MAX;
+            }
+        }
+        // Line 489-497: IDIV bounds
+        else if (uop->op == OPS_IDIV) {
+            // Helper for ceiling division toward zero
+            #define CDIV(x, y) ((y) == 0 ? 0 : ((x) < 0) != ((y) < 0) ? -labs(x)/labs(y) : labs(x)/labs(y))
+            
+            if (s1_vmin == s1_vmax) {  // s1 is a const
+                int64_t c = s1_vmin;
+                if (c > 0) {
+                    uop->vmin = CDIV(s0_vmin, c);
+                    uop->vmax = CDIV(s0_vmax, c);
+                } else if (c < 0) {
+                    uop->vmin = CDIV(s0_vmax, c);
+                    uop->vmax = CDIV(s0_vmin, c);
+                } else {
+                    uop->vmin = INT64_MIN;
+                    uop->vmax = INT64_MAX;
+                }
+            } else if (s0_vmax <= 0 && s1_vmax < 0) {
+                uop->vmin = CDIV(s0_vmax, s1_vmin);
+                uop->vmax = CDIV(s0_vmin, s1_vmax);
+            } else if (s0_vmin >= 0 && s1_vmin > 0) {
+                uop->vmin = CDIV(s0_vmin, s1_vmax);
+                uop->vmax = CDIV(s0_vmax, s1_vmin);
+            } else if (s0_vmax <= 0 && s1_vmin > 0) {
+                uop->vmin = CDIV(s0_vmin, s1_vmin);
+                uop->vmax = CDIV(s0_vmax, s1_vmax);
+            } else if (s0_vmin >= 0 && s1_vmax < 0) {
+                uop->vmin = CDIV(s0_vmax, s1_vmax);
+                uop->vmax = CDIV(s0_vmin, s1_vmin);
+            } else {
+                uop->vmin = INT64_MIN;
+                uop->vmax = INT64_MAX;
+            }
+            #undef CDIV
+        }
+        // Default for other ops - use dtype bounds
+        else {
+            uop->vmin = INT64_MIN;
+            uop->vmax = INT64_MAX;
         }
         
-        return (int)dtypes_min(&uop->dtype);
+        uop->vmin_vmax_valid = true;
+        return;
     }
     
-    // MAX operation
-    if (uop->op == OPS_MAX && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        return s0_vmin > s1_vmin ? s0_vmin : s1_vmin;
+    // Unary operations - NEG
+    if (uop->op == OPS_NEG && uop->src_count == 1) {
+        compute_min_max(uop->src[0]);
+        int64_t s0_vmin = uop->src[0]->vmin;
+        int64_t s0_vmax = uop->src[0]->vmax;
+        uop->vmin = -s0_vmax;
+        uop->vmax = -s0_vmin;
+        uop->vmin_vmax_valid = true;
+        return;
     }
     
-    // Note: MIN is implemented as -MAX(-a, -b) in uop_min, so no need to handle here
-    
-    // WHERE operation: min of both branches
+    // Line 505: WHERE for int dtypes
     if (uop->op == OPS_WHERE && uop->src_count == 3) {
-        int true_vmin = uop_vmin(uop->src[1]);
-        int false_vmin = uop_vmin(uop->src[2]);
-        return true_vmin < false_vmin ? true_vmin : false_vmin;
+        compute_min_max(uop->src[1]);
+        compute_min_max(uop->src[2]);
+        uop->vmin = (uop->src[1]->vmin < uop->src[2]->vmin) ? uop->src[1]->vmin : uop->src[2]->vmin;
+        uop->vmax = (uop->src[1]->vmax > uop->src[2]->vmax) ? uop->src[1]->vmax : uop->src[2]->vmax;
+        uop->vmin_vmax_valid = true;
+        return;
     }
     
-    // SHL (left shift) - Python only handles constant shift case
-    if (uop->op == OPS_SHL && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // Python: if s1_vmin == s1_vmax: return s0_vmin << s1_vmin
-        if (s1_vmin == s1_vmax && s1_vmin >= 0 && s1_vmin < 32) {
-            return s0_vmin << s1_vmin;
-        }
-        return (int)dtypes_min(&uop->dtype);
-    }
-    
-    // SHR (right shift) - Python only handles constant shift case
-    if (uop->op == OPS_SHR && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // Python: if s1_vmin == s1_vmax: return s0_vmin >> s1_vmin
-        if (s1_vmin == s1_vmax && s1_vmin >= 0 && s1_vmin < 32) {
-            return s0_vmin >> s1_vmin;
-        }
-        return (int)dtypes_min(&uop->dtype);
-    }
-    
-    // AND operation with positive constant
-    if (uop->op == OPS_AND && uop->src_count == 2) {
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // AND with positive constant: result is 0 to constant
-        if (s1_vmin == s1_vmax && s1_vmin >= 0) {
-            return 0;
-        }
-        // General case
-        return 0;
-    }
-    
-    // CMPNE (not equal)
-    if (uop->op == OPS_CMPNE && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // If ranges don't overlap, always not equal
-        if (s0_vmax < s1_vmin || s0_vmin > s1_vmax) {
-            return 1;
-        }
-        // If both are the same constant, always equal (ne returns 0)
-        if (s0_vmin == s0_vmax && s1_vmin == s1_vmax && s0_vmin == s1_vmin) {
-            return 0;
-        }
-        // Otherwise can be either
-        return 0;
-    }
-    
-    // Line 489-497: IDIV bounds calculation
-    if (uop->op == OPS_IDIV && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // Helper function for cdiv (ceiling division toward zero)
-        int cdiv(int x, int y) {
-            if (y == 0) return 0;
-            int sign = (x < 0) ^ (y < 0) ? -1 : 1;
-            return (abs(x) / abs(y)) * sign;
-        }
-        
-        // s1 is a const
-        if (s1_vmin == s1_vmax) {
-            int c = s1_vmin;
-            if (c > 0) return cdiv(s0_vmin, c);
-            if (c < 0) return cdiv(s0_vmax, c);
-        }
-        
-        // Different sign cases
-        if (s0_vmax <= 0 && s1_vmax < 0) return cdiv(s0_vmax, s1_vmin);
-        if (s0_vmin >= 0 && s1_vmin > 0) return cdiv(s0_vmin, s1_vmax);
-        if (s0_vmax <= 0 && s1_vmin > 0) return cdiv(s0_vmin, s1_vmin);
-        if (s0_vmin >= 0 && s1_vmax < 0) return cdiv(s0_vmax, s1_vmax);
-    }
-    
-    // Default to dtype min
-    return (int)dtypes_min(&uop->dtype);
+    // Line 518: Default - use dtype bounds
+    uop->vmin = INT64_MIN;
+    uop->vmax = INT64_MAX;
+    uop->vmin_vmax_valid = true;
+}
+
+// Line 472-474: Property accessors for vmin/vmax
+int uop_vmin(UOp* uop) {
+    if (!uop) return 0;
+    if (!uop->vmin_vmax_valid) compute_min_max(uop);
+    return (int)uop->vmin;
 }
 
 int uop_vmax(UOp* uop) {
     if (!uop) return 0;
-    
-    // Line 507: DEFINE_VAR returns arg[2] as vmax
-    if (uop->op == OPS_DEFINE_VAR) {
-        // DEFINE_VAR needs special handling
-        // In Python it's (name, min, max) tuple
-        if (uop->arg.type == ARG_VAR) {
-            return uop->arg.var.vmax;
-        }
-        // Fallback for old-style ARG_INT encoding (assume max=min)
-        if (uop->arg.type == ARG_INT) {
-            return uop->arg.int_data.i;
-        }
-        return 0;
-    }
-    
-    // Line 513: CONST returns its value for both vmin and vmax
-    if (uop->op == OPS_CONST) {
-        if (uop->arg.type == ARG_CONST) {
-            return (int)uop->arg.const_data.const_value;
-        }
-        if (uop->arg.type == ARG_INT) {
-            return uop->arg.int_data.i;
-        }
-    }
-    
-    // Line 479: ADD returns sum of vmaxs
-    if (uop->op == OPS_ADD && uop->src_count == 2) {
-        return uop_vmax(uop->src[0]) + uop_vmax(uop->src[1]);
-    }
-    
-    // Line 480: SUB returns s0_vmax - s1_vmin
-    if (uop->op == OPS_SUB && uop->src_count == 2) {
-        return uop_vmax(uop->src[0]) - uop_vmin(uop->src[1]);
-    }
-    
-    // Line 482: MUL returns max of all products
-    if (uop->op == OPS_MUL && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        int v1 = s0_vmin * s1_vmin;
-        int v2 = s0_vmin * s1_vmax;
-        int v3 = s0_vmax * s1_vmin;
-        int v4 = s0_vmax * s1_vmax;
-        
-        int max = v1;
-        if (v2 > max) max = v2;
-        if (v3 > max) max = v3;
-        if (v4 > max) max = v4;
-        return max;
-    }
-    
-    // Line 499: CMPLT returns (s0_vmin < s1_vmax)  
-    if (uop->op == OPS_CMPLT && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        return s0_vmin < s1_vmax ? 1 : 0;
-    }
-    
-    // NEG operation: negation flips min/max
-    if (uop->op == OPS_NEG && uop->src_count == 1) {
-        return -uop_vmin(uop->src[0]);
-    }
-    
-    // MOD operation bounds - line 486-488 from Python
-    if (uop->op == OPS_MOD && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // if s1_vmin > 0: return (0, s1_vmax-1) if s0_vmin >= 0 else (-(s1_vmax-1), 0) if s0_vmax <= 0 else (-(s1_vmax-1), s1_vmax-1)
-        if (s1_vmin > 0) {
-            if (s0_vmin >= 0) {
-                // Special case: if dividend range is entirely within [0, divisor), result is just the dividend range
-                if (s0_vmax < s1_vmin) return s0_vmax;
-                return s1_vmax - 1;  // vmax = s1_vmax-1
-            }
-            else if (s0_vmax <= 0) return 0;  // vmax = 0
-            else return s1_vmax - 1;  // vmax = s1_vmax-1
-        }
-        // if s1_vmax < 0: return (0, -s1_vmin-1) if s0_vmin >= 0 else (-(-s1_vmin-1), 0) if s0_vmax <= 0 else (-(-s1_vmin-1), -s1_vmin-1)
-        if (s1_vmax < 0) {
-            if (s0_vmin >= 0) return -s1_vmin - 1;  // vmax = -s1_vmin-1
-            else if (s0_vmax <= 0) return 0;  // vmax = 0
-            else return -s1_vmin - 1;  // vmax = -s1_vmin-1
-        }
-        
-        return (int)dtypes_max(&uop->dtype);
-    }
-    
-    // MAX operation
-    if (uop->op == OPS_MAX && uop->src_count == 2) {
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        return s0_vmax > s1_vmax ? s0_vmax : s1_vmax;
-    }
-    
-    // Note: MIN is implemented as -MAX(-a, -b) in uop_min, so no need to handle here
-    
-    // WHERE operation: max of both branches
-    if (uop->op == OPS_WHERE && uop->src_count == 3) {
-        int true_vmax = uop_vmax(uop->src[1]);
-        int false_vmax = uop_vmax(uop->src[2]);
-        return true_vmax > false_vmax ? true_vmax : false_vmax;
-    }
-    
-    // SHL (left shift) - Python only handles constant shift case
-    if (uop->op == OPS_SHL && uop->src_count == 2) {
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // Python: if s1_vmin == s1_vmax: return s0_vmax << s1_vmin
-        if (s1_vmin == s1_vmax && s1_vmin >= 0 && s1_vmin < 32) {
-            return s0_vmax << s1_vmin;
-        }
-        return (int)dtypes_max(&uop->dtype);
-    }
-    
-    // SHR (right shift) - Python only handles constant shift case
-    if (uop->op == OPS_SHR && uop->src_count == 2) {
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // Python: if s1_vmin == s1_vmax: return s0_vmax >> s1_vmin
-        if (s1_vmin == s1_vmax && s1_vmin >= 0 && s1_vmin < 32) {
-            return s0_vmax >> s1_vmin;
-        }
-        return (int)dtypes_max(&uop->dtype);
-    }
-    
-    // AND operation with positive constant
-    if (uop->op == OPS_AND && uop->src_count == 2) {
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // AND with positive constant: result is 0 to constant
-        if (s1_vmin == s1_vmax && s1_vmin >= 0) {
-            return s1_vmin;  // Maximum is the constant itself
-        }
-        // General case: could be all bits set
-        return s1_vmax >= 0 ? s1_vmax : -1;
-    }
-    
-    // CMPNE (not equal)
-    if (uop->op == OPS_CMPNE && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // If ranges don't overlap, always not equal
-        if (s0_vmax < s1_vmin || s0_vmin > s1_vmax) {
-            return 1;
-        }
-        // If both are the same constant, always equal (ne returns 0)
-        if (s0_vmin == s0_vmax && s1_vmin == s1_vmax && s0_vmin == s1_vmin) {
-            return 0;
-        }
-        // Otherwise can be either
-        return 1;
-    }
-    
-    // Line 489-497: IDIV bounds calculation
-    if (uop->op == OPS_IDIV && uop->src_count == 2) {
-        int s0_vmin = uop_vmin(uop->src[0]);
-        int s0_vmax = uop_vmax(uop->src[0]);
-        int s1_vmin = uop_vmin(uop->src[1]);
-        int s1_vmax = uop_vmax(uop->src[1]);
-        
-        // Helper function for cdiv (ceiling division toward zero)
-        int cdiv(int x, int y) {
-            if (y == 0) return 0;
-            int sign = (x < 0) ^ (y < 0) ? -1 : 1;
-            return (abs(x) / abs(y)) * sign;
-        }
-        
-        // s1 is a const
-        if (s1_vmin == s1_vmax) {
-            int c = s1_vmin;
-            if (c > 0) return cdiv(s0_vmax, c);
-            if (c < 0) return cdiv(s0_vmin, c);
-        }
-        
-        // Different sign cases
-        if (s0_vmax <= 0 && s1_vmax < 0) return cdiv(s0_vmin, s1_vmax);
-        if (s0_vmin >= 0 && s1_vmin > 0) return cdiv(s0_vmax, s1_vmin);
-        if (s0_vmax <= 0 && s1_vmin > 0) return cdiv(s0_vmax, s1_vmax);
-        if (s0_vmin >= 0 && s1_vmax < 0) return cdiv(s0_vmin, s1_vmin);
-    }
-    
-    // Default to dtype max
-    return (int)dtypes_max(&uop->dtype);
+    if (!uop->vmin_vmax_valid) compute_min_max(uop);
+    return (int)uop->vmax;
 }
 
 int uop_sym_infer(UOp* uop) {
     // For now, sym_infer returns vmin (could be vmax or midpoint)
     // The actual Python implementation creates a lambda and evaluates it,
     // but for simple cases we can just return the bounds
-    return uop_vmin(uop);
+    return (int)uop_vmin(uop);
 }
 
 // Line 600: def resolve(self, default_val:bool=False) -> bool:
@@ -1157,42 +990,14 @@ bool uop_resolve(UOp* uop, bool default_val) {
     
     // If vmin == vmax, we know the value for certain
     if (vmin == vmax) {
-        return vmin != 0;
+        return vmin != 0;  // Convert to boolean
     }
     
     // Otherwise return default (ambiguous)
     return default_val;
 }
 
-// Variable creation function - missing from current implementation
-UOp* uop_create_variable(int min_val, int max_val) {
-    UOpArg arg = {0};
-    arg.type = ARG_INT;
-    // Encode min_val and max_val in the argument
-    // Using a simple encoding for now
-    arg.int_data.i = min_val;
-    UOp* var = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, &arg, NULL);
-    return var;
-}
-
-// Stub implementations for additional resolve functions (TDD)
-int uop_resolve_int(UOp* uop) {
-    // Stub: Return 0 for now, will fail tests as expected in TDD
-    (void)uop;  // Silence unused parameter warning
-    return 0;
-}
-
-float uop_resolve_float(UOp* uop) {
-    // Stub: Return 0.0 for now, will fail tests as expected in TDD
-    (void)uop;  // Silence unused parameter warning
-    return 0.0f;
-}
-
-bool uop_resolve_bool(UOp* uop) {
-    // Stub: Just use the existing resolve with true as default
-    return uop_resolve(uop, true);
-}
-
+// Line 427-431: bind function
 // Variable binding function
 UOp* uop_bind(UOp* var, UOp* value) {
     if (var->op != OPS_DEFINE_VAR) {
@@ -1695,6 +1500,16 @@ UOp* uop_var_with_range(const char* name, DType dtype, int min_val, int max_val)
     arg.var.vmax = max_val;
     // Store name if needed (not currently used)
     return uop_new(OPS_DEFINE_VAR, dtype, NULL, 0, &arg, NULL);
+}
+
+// RANGE operation - creates index range from 0 to n-1
+UOp* uop_range(UOp* n, int idx) {
+    // RANGE(n, idx) creates range from 0 to n-1 with index idx
+    UOpArg arg = {0};
+    arg.type = ARG_INT;
+    arg.int_data.i = idx;
+    UOp* src[] = {n};
+    return uop_new(OPS_RANGE, dtypes.int32, src, 1, &arg, NULL);
 }
 
 UOp* uop_buffer(int64_t* shape, size_t shape_count, DType dtype) {
