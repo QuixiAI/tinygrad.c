@@ -1,10 +1,6 @@
 #ifndef TEST_COMMON_H
 #define TEST_COMMON_H
 
-/* Unity configuration - defined once for all tests */
-#define UNITY_INCLUDE_DOUBLE
-#define UNITY_INCLUDE_FLOAT
-#define UNITY_OUTPUT_COLOR
 
 #include "unity.h"
 #include "tg.h"
@@ -41,16 +37,23 @@ extern int g_test_count;
     } \
     static void fname(void)
 
+/* Forward declare dtype init/cleanup for tests that need it */
+void dtypes_init(void);
+void dtypes_cleanup(void);
+
 /* Simplified main for test files */
 #define TEST_MAIN() \
     TestEntry g_tests[MAX_TESTS]; \
     int g_test_count = 0; \
     int main(void) { \
+        dtypes_init(); /* Initialize dtype system */ \
         UNITY_BEGIN(); \
         for (int i = 0; i < g_test_count; i++) { \
             UnityDefaultTestRun(g_tests[i].func, g_tests[i].name, __LINE__); \
         } \
-        return UNITY_END(); \
+        int result = UNITY_END(); \
+        dtypes_cleanup(); /* Cleanup dtype system */ \
+        return result; \
     }
 
 /* Common test setup/teardown if needed in the future */

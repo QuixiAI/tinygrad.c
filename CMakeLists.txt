@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(tinygradc C)
 
+# ---- Language & global options ----
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -17,12 +18,18 @@ endif()
 # Make all libs PIC so we can make plugins later (backends)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Python for manifest generation
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+# ---- Find dependencies ----
+find_package(unity CONFIG REQUIRED)
+find_package(GSL CONFIG REQUIRED)
 
-# ---------------------------
-# Core object libraries
-# ---------------------------
+# ---- numpy_compat library ----
+add_library(numpy_compat STATIC
+  src/numpy_compat.c
+)
+target_include_directories(numpy_compat PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(numpy_compat PUBLIC GSL::gsl GSL::gslcblas)
+
+# ---- Core object libraries ----
 add_library(tg_tensor OBJECT
   src/tensor/tensor.c
 )
@@ -51,23 +58,21 @@ add_library(tg_nn OBJECT
 )
 target_include_directories(tg_nn PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 
-# ---------------------------
-# Stubbed modules (auto-discovered)
-# These compile harmlessly; you’ll replace them piecemeal while porting.
-# ---------------------------
-file(GLOB STUB_DTYPE    CONFIGURE_DEPENDS src/dtype/*.c)
-file(GLOB STUB_SHAPE    CONFIGURE_DEPENDS src/shape/*.c)
-file(GLOB STUB_HELPERS  CONFIGURE_DEPENDS src/helpers/*.c)
-file(GLOB STUB_DEVICE   CONFIGURE_DEPENDS src/device/*.c)
-file(GLOB STUB_UOP      CONFIGURE_DEPENDS src/uop/*.c)
-file(GLOB STUB_CODEGEN  CONFIGURE_DEPENDS src/codegen/*.c)
+# ---- Stubbed modules (auto-discovered) ----
+file(GLOB STUB_DTYPE       CONFIGURE_DEPENDS src/dtype/*.c)
+file(GLOB STUB_SHAPE       CONFIGURE_DEPENDS src/shape/*.c)
+file(GLOB STUB_HELPERS     CONFIGURE_DEPENDS src/helpers/*.c)
+file(GLOB STUB_DEVICE      CONFIGURE_DEPENDS src/device/*.c)
+file(GLOB STUB_UOP         CONFIGURE_DEPENDS src/uop/*.c)
+file(GLOB STUB_GRADIENT    CONFIGURE_DEPENDS src/gradient/*.c)
+file(GLOB STUB_CODEGEN     CONFIGURE_DEPENDS src/codegen/*.c)
 file(GLOB STUB_CODEGEN_OPT CONFIGURE_DEPENDS src/codegen/opt/*.c)
-file(GLOB STUB_RENDERER CONFIGURE_DEPENDS src/renderer/*.c)
-file(GLOB STUB_FRONTEND CONFIGURE_DEPENDS src/frontend/*.c)
-file(GLOB STUB_SCHEDULE CONFIGURE_DEPENDS src/schedule/*.c)
-file(GLOB STUB_RTGRAPH  CONFIGURE_DEPENDS src/runtime/graph/*.c)
+file(GLOB STUB_RENDERER    CONFIGURE_DEPENDS src/renderer/*.c)
+file(GLOB STUB_FRONTEND    CONFIGURE_DEPENDS src/frontend/*.c)
+file(GLOB STUB_SCHEDULE    CONFIGURE_DEPENDS src/schedule/*.c)
+file(GLOB STUB_RTGRAPH     CONFIGURE_DEPENDS src/runtime/graph/*.c)
 # extra NN stubs (exclude sgd.c which is real)
-file(GLOB STUB_NN_EXTRA CONFIGURE_DEPENDS src/nn/*.c)
+file(GLOB STUB_NN_EXTRA    CONFIGURE_DEPENDS src/nn/*.c)
 list(FILTER STUB_NN_EXTRA EXCLUDE REGEX ".*/sgd\\.c$")
 
 macro(add_stub_obj name files)
@@ -77,22 +82,21 @@ macro(add_stub_obj name files)
   endif()
 endmacro()
 
-add_stub_obj(tg_dtype        STUB_DTYPE)
-add_stub_obj(tg_shape        STUB_SHAPE)
-add_stub_obj(tg_helpers      STUB_HELPERS)
-add_stub_obj(tg_device       STUB_DEVICE)
-add_stub_obj(tg_uop          STUB_UOP)
-add_stub_obj(tg_codegen      STUB_CODEGEN)
-add_stub_obj(tg_codegen_opt  STUB_CODEGEN_OPT)
-add_stub_obj(tg_renderer     STUB_RENDERER)
-add_stub_obj(tg_frontend     STUB_FRONTEND)
-add_stub_obj(tg_schedule     STUB_SCHEDULE)
+add_stub_obj(tg_dtype         STUB_DTYPE)
+add_stub_obj(tg_shape         STUB_SHAPE)
+add_stub_obj(tg_helpers       STUB_HELPERS)
+add_stub_obj(tg_device        STUB_DEVICE)
+add_stub_obj(tg_uop           STUB_UOP)
+add_stub_obj(tg_gradient      STUB_GRADIENT)
+add_stub_obj(tg_codegen       STUB_CODEGEN)
+add_stub_obj(tg_codegen_opt   STUB_CODEGEN_OPT)
+add_stub_obj(tg_renderer      STUB_RENDERER)
+add_stub_obj(tg_frontend      STUB_FRONTEND)
+add_stub_obj(tg_schedule      STUB_SCHEDULE)
 add_stub_obj(tg_runtime_graph STUB_RTGRAPH)
-add_stub_obj(tg_nn_extra     STUB_NN_EXTRA)
+add_stub_obj(tg_nn_extra      STUB_NN_EXTRA)
 
-# ---------------------------
-# Final library
-# ---------------------------
+# ---- Final library ----
 add_library(tinygradc STATIC
   $<TARGET_OBJECTS:tg_tensor>
   $<TARGET_OBJECTS:tg_engine>
@@ -104,6 +108,7 @@ add_library(tinygradc STATIC
   $<$<TARGET_EXISTS:tg_helpers>:$<TARGET_OBJECTS:tg_helpers>>
   $<$<TARGET_EXISTS:tg_device>:$<TARGET_OBJECTS:tg_device>>
   $<$<TARGET_EXISTS:tg_uop>:$<TARGET_OBJECTS:tg_uop>>
+  $<$<TARGET_EXISTS:tg_gradient>:$<TARGET_OBJECTS:tg_gradient>>
   $<$<TARGET_EXISTS:tg_codegen>:$<TARGET_OBJECTS:tg_codegen>>
   $<$<TARGET_EXISTS:tg_codegen_opt>:$<TARGET_OBJECTS:tg_codegen_opt>>
   $<$<TARGET_EXISTS:tg_renderer>:$<TARGET_OBJECTS:tg_renderer>>
@@ -114,70 +119,39 @@ add_library(tinygradc STATIC
 )
 target_include_directories(tinygradc PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
 
+# Link numpy_compat and GSL to tinygradc
+target_link_libraries(tinygradc PUBLIC numpy_compat GSL::gsl GSL::gslcblas)
+
 # Link libm on Linux
 if(UNIX AND NOT APPLE)
   target_link_libraries(tinygradc PUBLIC m)
 endif()
 
-# ---------------------------
-# Manifest generation (for client generators)
-# ---------------------------
-add_custom_target(tinygradc_manifest
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/generators/manifest/gen_manifest.py
-          ${CMAKE_SOURCE_DIR}/include/tg.h
-          ${CMAKE_SOURCE_DIR}/generators/manifest/tg_manifest.json
-  DEPENDS ${CMAKE_SOURCE_DIR}/generators/manifest/gen_manifest.py ${CMAKE_SOURCE_DIR}/include/tg.h
-  COMMENT "Generating tg_manifest.json"
-)
-
-# ---------------------------
-# Examples
-# ---------------------------
+# ---- Examples ----
 if(BUILD_EXAMPLES)
   add_executable(resnet18_cpu examples/resnet18_cpu.c)
   target_link_libraries(resnet18_cpu PRIVATE tinygradc)
 endif()
 
-# ---------------------------
-# Unity Test Framework
-# ---------------------------
-add_library(unity STATIC
-  third_party/unity/unity.c
-)
-target_include_directories(unity PUBLIC ${CMAKE_SOURCE_DIR}/third_party/unity)
-# Enable double support when compiling Unity
-target_compile_definitions(unity PRIVATE UNITY_INCLUDE_DOUBLE UNITY_INCLUDE_FLOAT)
-
-# ---------------------------
-# Tests
-# ---------------------------
+# ---- Tests (Unity via Conan) ----
 if(BUILD_TESTS)
-  # Create an interface library for common test dependencies
   add_library(test_common INTERFACE)
   target_include_directories(test_common INTERFACE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/third_party/unity
     ${CMAKE_SOURCE_DIR}/tests
   )
-  target_link_libraries(test_common INTERFACE tinygradc unity)
-  
-  # Find all test files recursively
+  target_link_libraries(test_common INTERFACE tinygradc unity::unity)
+
+  # Discover and register tests
   file(GLOB_RECURSE TEST_SOURCES tests/*.c)
-  
-  # Create test executables from found files
   foreach(test_source ${TEST_SOURCES})
-    # Get filename without extension
     get_filename_component(test_name ${test_source} NAME_WE)
-    
-    # Create executable
     add_executable(${test_name} ${test_source})
     target_link_libraries(${test_name} PRIVATE test_common)
-    
-    # Register as test
     add_test(NAME ${test_name} COMMAND ${test_name})
   endforeach()
 
+  include(CTest)
   enable_testing()
-  
 endif()

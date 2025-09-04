@@ -22,6 +22,9 @@ struct tg_tensor {
   float *data;
   float *grad;
   int requires_grad;
+  
+  /* UOp representation for gradient computation */
+  struct tg_uop *uop;
 
   /* autograd links */
   tg_op_kind grad_op;
