@@ -59,6 +59,33 @@ np_array_t* np_zeros(size_t ndim, const size_t* shape, const DType* dtype) {
     return arr;
 }
 
+np_array_t* np_ones(size_t ndim, const size_t* shape, const DType* dtype) {
+    np_array_t* arr = np_empty(ndim, shape, dtype);
+    
+    // Fill with ones based on dtype
+    if (dtype_eq(dtype, &dtypes.float64)) {
+        double* data = (double*)arr->data;
+        for (size_t i = 0; i < arr->size; i++) {
+            data[i] = 1.0;
+        }
+    } else if (dtype_eq(dtype, &dtypes.float32)) {
+        float* data = (float*)arr->data;
+        for (size_t i = 0; i < arr->size; i++) {
+            data[i] = 1.0f;
+        }
+    } else if (dtype_eq(dtype, &dtypes.int32)) {
+        int32_t* data = (int32_t*)arr->data;
+        for (size_t i = 0; i < arr->size; i++) {
+            data[i] = 1;
+        }
+    } else {
+        // Generic byte fill
+        memset(arr->data, 1, arr->size * dtype->itemsize);
+    }
+    
+    return arr;
+}
+
 bool np_allclose(np_array_t* a, np_array_t* b, double rtol, double atol) {
     if (!dtype_eq(&a->dtype, &b->dtype) || a->size != b->size) {
         return false;

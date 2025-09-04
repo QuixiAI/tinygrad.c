@@ -50,8 +50,10 @@ add_library(tg_ops_cpu OBJECT
   src/runtime/ops_cpu/kernels/pool.c
   src/runtime/ops_cpu/kernels/conv_im2col.c
   src/runtime/ops_cpu/kernels/linear.c
+  src/runtime/uop_interpreter.c
 )
 target_include_directories(tg_ops_cpu PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(tg_ops_cpu PUBLIC numpy_compat GSL::gsl GSL::gslcblas)
 
 add_library(tg_nn OBJECT
   src/nn/sgd.c
@@ -88,6 +90,9 @@ add_stub_obj(tg_helpers       STUB_HELPERS)
 add_stub_obj(tg_device        STUB_DEVICE)
 add_stub_obj(tg_uop           STUB_UOP)
 add_stub_obj(tg_gradient      STUB_GRADIENT)
+if(TARGET tg_gradient)
+  target_link_libraries(tg_gradient PUBLIC numpy_compat GSL::gsl GSL::gslcblas)
+endif()
 add_stub_obj(tg_codegen       STUB_CODEGEN)
 add_stub_obj(tg_codegen_opt   STUB_CODEGEN_OPT)
 add_stub_obj(tg_renderer      STUB_RENDERER)
