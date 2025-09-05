@@ -126,6 +126,12 @@ test:
 	    exit 1; \
 	  fi'
 
+.PHONY: ctest
+ctest:
+	@set -e; \
+	if [ ! -d build ]; then $(MAKE) -s build > /dev/null; fi; \
+	ctest --test-dir build --output-on-failure
+
 clean:
 	rm -rf build
 

@@ -41,6 +41,20 @@ TG_API int tg_context_get_compiler_cache(void);
 // Device operations
 TG_API int tg_device_compile_test(const char* device_str);
 
+// Finalize (close) all opened devices (mirrors Python atexit finalize)
+TG_API void tg_device_finalize_all(void);
+
+// Return allocator for a device (backend-provided or default)
+struct tg_allocator; // fwd decl
+TG_API const struct tg_allocator* tg_device_get_allocator(const char* device_str);
+
+// Allow or disallow device usage (mirrors Python Context/ALLOW_DEVICE_USAGE)
+TG_API void tg_device_set_allow_usage(int allow);
+
+// List available devices by attempting to open/close backends (no side effects)
+// Returns the number of devices written to out_names (canonical names), up to max_names
+TG_API int tg_device_get_available(const char** out_names, int max_names);
+
 #ifdef __cplusplus
 }
 #endif

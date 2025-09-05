@@ -104,7 +104,7 @@ Advanced
 
 Notes
 - Conan always runs inside Docker; CMake builds/tests run on the host.
-- A checked-in Conan profile lives at `profiles/linux-gcc11`; a lockfile is created under `profiles/locks/` and used on installs for reproducible dependency resolution.
+- A checked-in Conan profile lives at `profiles/linux-gcc11`; a lockfile is created under `build/conan/locks/` and used on installs for reproducible dependency resolution.
 
 **Run individual tests:**
 ```bash
@@ -150,6 +150,23 @@ The output will be written to:
 ```
 generators/manifest/tg_manifest.json
 ```
+
+---
+
+## Runtime Tuning
+
+- LRU cache cap: control the global size of the allocator’s LRU cache via the `LRU_CACHE_CAP` environment variable.
+  - Accepts bytes with optional K/M/G suffix (base 1024): examples: `LRU_CACHE_CAP=1048576`, `LRU_CACHE_CAP=512K`, `LRU_CACHE_CAP=2M`, `LRU_CACHE_CAP=1G`.
+  - Can also be set at runtime via the C API: `tg_allocator_set_cache_cap(cap_bytes)`.
+  - Inspect current values using:
+    - `tg_allocator_get_cache_cap()` and `tg_allocator_get_cached_bytes()`.
+
+Example
+```bash
+LRU_CACHE_CAP=64M make test
+```
+
+Process exit automatically finalizes opened devices (registered via `atexit`) to mirror tinygrad behavior.
 
 ---
 

@@ -7,8 +7,9 @@
 1) UOp + ShapeTracker + Interpreter: faithfully ported and green.
 2) Gradient system: line‑for‑line movement + binary rules; all gradient tests passing.
 3) Tensor autograd layer: core ops ported; broadcasting via reshape+expand.
+4) Device manager + Buffer + Allocator (LRU) faithfully ported; DMARef on CPU; env-driven DEFAULT; atexit finalize.
 
-- All 314 tests passing locally (UOp, shape, gradient, tensor, and integration tests)
+- All 327 tests passing locally (UOp, shape, gradient, tensor, device/buffer, and integration tests)
 - exec_alu, vmin/vmax propagation, pattern matching, and symbolic simplification complete
 - Movement ops carry ShapeTracker on UOp; interpreter implements movement + broadcasting
 - `make test` is quiet and prints a concise summary
@@ -55,8 +56,10 @@ These files have no internal tinygrad dependencies and must be ported first:
 - [x] `gradient.py` → `src/gradient/gradient.c` - Automatic differentiation ✅
   - **Depends on:** `tinygrad.uop.ops`, `tinygrad.helpers`, ShapeTracker
   - Implemented pm rules (unary/binary/movement), reduce_gradient, deepwalk, and compute_gradient
-- [ ] `device.py` → `src/device/device.c` - Device abstraction layer
+- [x] `device.py` → `src/device/device.c` - Device abstraction layer ✅
   - **Depends on:** `tinygrad.helpers`, `tinygrad.dtype`, `tinygrad.renderer`
+  - Implemented: canonicalize/DEFAULT/env flags; ALLOW_DEVICE_USAGE; static backend registry (CPU, DISK, NPY, LLVM); atexit finalize; get_available
+  - Buffer/Allocator: faithful API with views, dtype-aware nbytes, copyin/out, numpy interop; LRU cache with global cap (`LRU_CACHE_CAP`); DMARef (CPU) and stubs for FD.
 
 ## Phase 6: Advanced UOp Operations
 - [x] `uop/symbolic.py` → `src/uop/symbolic.c` - Symbolic math and simplification ✅
@@ -163,12 +166,12 @@ These files have no internal tinygrad dependencies and must be ported first:
 16. **runtime/ops_cpu.py** - Full CPU backend with optimized kernels ✅
 17. **nn/sgd.py** - SGD optimizer with momentum and weight decay ✅
 
-**Test Status:** All 314 tests passing
+**Test Status:** All 327 tests passing
 
 ### 🚧 Next Priority Items
-1. **device.py** - Device abstraction layer (refine as needed)
-2. **renderer** - CStyle/PTX/WGSL backends (build-out as needed)
-3. **engine/realize.py** - Tensor realization
+1. **renderer** - CStyle/PTX/WGSL backends (build-out as needed)
+2. **engine/realize.py** - Tensor realization (continue refining paths)
+3. **backends** - CUDA, Metal/MPS, ROCm bring-up (see Backend TODOs)
 
 ## Critical Path for ResNet-18 CPU Training
 
@@ -204,6 +207,41 @@ This porting order has been **validated through direct analysis** of Python impo
 - Start with concrete implementations before adding symbolic support
 - Test each phase thoroughly before moving to the next
 - `make test` is quiet; all compiler warnings resolved
+
+## Device & Buffer Port Status (2025-09-05)
+
+- Device manager: canonicalize, DEFAULT env logic (ignores DISK/NPY flags, honors DEV), ALLOW_DEVICE_USAGE, atexit finalize.
+- Backend registry: CPU, DISK, NPY, LLVM (minimal). Per-backend allocator hooks pluggable.
+- Buffer: views (base+offset), dtype-aware `nbytes`, `copyin/out`, `numpy()` via `numpy_compat`, `as_buffer` respects zero-copy flags, `as_dmaref` for CPU.
+- Allocator: malloc-backed with LRU wrapper; global cache cap with eviction; env `LRU_CACHE_CAP` (bytes or K/M/G); transfer hook (memcpy on CPU).
+- Tests: device availability, DEFAULT edge cases, canonicalize, DMARef (incl. view offsets), LRU bounds, LLVM backend availability.
+
+## Backend TODOs (CUDA, Metal/MPS, ROCm)
+
+- Common
+  - Implement per-backend allocator with `_alloc/_free/_copyin/_copyout` and optional `_as_buffer/_offset`.
+  - Provide `_as_dmaref`:
+    - CPU: DMACPURef (done)
+    - GPU-class: DMAFdRef (export dmabuf/IOSurface handle + offset/size) where applicable
+  - Implement `_transfer` for efficient device→device copies (peer copies or staging where needed).
+  - Synchronization and queueing: expose `synchronize`, compute/copy queues, signals.
+  - Compiler integration: per-backend `Compiler` (PTX, Metal, HIP/LLVM) and renderer glue.
+
+- CUDA/NV
+  - Detect visible devices and register per-device contexts.
+  - Zero-copy buffer views if possible; pinned host memory pathways.
+  - DMAFdRef export where supported (Linux).
+  - PTX renderer and JIT (or NVRTC).
+
+- Metal/MPS (macOS)
+  - MTLBuffer allocation and shared/managed storage paths.
+  - IOSurface/Shareable handle export (as DMA-like ref if viable).
+  - Metal Shading Language renderer and pipeline setup.
+
+- ROCm/AMD
+  - HCQ allocator using KFD; SDMA copy queue integration.
+  - DMAFdRef via amdkfd dmabuf export (fd, offset, size).
+  - LLVM/Clang codegen path and disassembly hooks.
 
 ## NumPy Shim Mapping (numpy_compat)
 

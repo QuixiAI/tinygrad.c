@@ -1,4 +1,4 @@
-#include "tests/test_common.h"
+#include "test_common.h"
 #include "numpy_compat.h"
 
 TEST(test_empty_zeros_ones) {
@@ -76,5 +76,7 @@ TEST(test_require_c_contiguous) {
   np_free(a);
 }
 
-TEST_MAIN()
+void setUp(void) {}
+void tearDown(void) {}
 
+TEST_MAIN()
