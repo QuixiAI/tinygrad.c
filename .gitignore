@@ -40,16 +40,17 @@ dist/
 *.idb
 *.pdb
 
-# CMake
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile
-compile_commands.json
-CTestTestfile.cmake
-_deps/
-*.cmake
+# CMake (limit to build artifacts)
+build/**/CMakeCache.txt
+build/**/CMakeFiles/
+build/**/cmake_install.cmake
+build/**/Makefile
+build/**/compile_commands.json
+build/**/CTestTestfile.cmake
+build/**/_deps/
+build/**/*.cmake
 !CMakeLists.txt
+!Makefile
 
 # Testing
 test/build/
@@ -170,4 +171,3 @@ reference/tinygrad/**/*.pyc
 .env
 .env.local
 config.local.*
-
