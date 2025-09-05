@@ -35,6 +35,9 @@ static void cache_result(tg_uop_t* uop, np_array_t* result) {
     cache_size++;
 }
 
+// Forward declarations
+void uop_interpreter_clear_cache(void);
+
 // Helper function to perform element-wise binary operations
 static np_array_t* binary_op(np_array_t* left, np_array_t* right, const char* op) {
     assert(left && right);
@@ -107,6 +110,26 @@ static np_array_t* unary_op(np_array_t* input, const char* op) {
     return result;
 }
 
+// Global context for current evaluation
+static eval_context_t* current_context = NULL;
+
+np_array_t* uop_interpreter_evaluate_with_context(tg_uop_t* uop, eval_context_t* ctx) {
+    // Save previous context and set new one
+    eval_context_t* prev_context = current_context;
+    current_context = ctx;
+    
+    // Clear cache when context changes
+    uop_interpreter_clear_cache();
+    
+    // Evaluate with the new context
+    np_array_t* result = uop_interpreter_evaluate(uop);
+    
+    // Restore previous context
+    current_context = prev_context;
+    
+    return result;
+}
+
 np_array_t* uop_interpreter_evaluate(tg_uop_t* uop) {
     if (!uop) return NULL;
     
@@ -142,6 +165,12 @@ np_array_t* uop_interpreter_evaluate(tg_uop_t* uop) {
             np_array_t* left = uop_interpreter_evaluate(uop->src[0]);
             np_array_t* right = uop_interpreter_evaluate(uop->src[1]);
             result = binary_op(left, right, "MUL");
+            if (getenv("DEBUG_INTERPRETER")) {
+                fprintf(stderr, "MUL: left[0]=%f, right[0]=%f, result[0]=%f\n", 
+                       left ? ((float*)left->data)[0] : 0.0f,
+                       right ? ((float*)right->data)[0] : 0.0f,
+                       result ? ((float*)result->data)[0] : 0.0f);
+            }
             break;
         }
         
@@ -241,17 +270,36 @@ np_array_t* uop_interpreter_evaluate(tg_uop_t* uop) {
         }
         
         case OPS_DEFINE_VAR: {
-            // Variable placeholder - check if there's associated tensor data
-            // The arg.var.name might help identify which tensor this represents
-            // For gradient computation, input tensors usually have their data
-            // For now, create array with values based on variable properties
-            result = np_ones(1, &(size_t){1}, &dtypes.float32);
+            // Variable placeholder - check if we have bound data in the context
+            if (getenv("DEBUG_INTERPRETER")) {
+                fprintf(stderr, "DEFINE_VAR: context=%p, binding_count=%d\n", 
+                       (void*)current_context, current_context ? current_context->binding_count : 0);
+            }
+            if (current_context) {
+                for (int i = 0; i < current_context->binding_count; i++) {
+                    if (current_context->bindings[i].var_uop == uop) {
+                        // Found the binding - return a copy of the data
+                        np_array_t* bound_data = current_context->bindings[i].data;
+                        result = np_zeros(bound_data->ndim, bound_data->shape, &bound_data->dtype);
+                        memcpy(result->data, bound_data->data, bound_data->size * bound_data->dtype.itemsize);
+                        if (getenv("DEBUG_INTERPRETER")) {
+                            fprintf(stderr, "  Found binding %d: data[0]=%f\n", i, ((float*)result->data)[0]);
+                        }
+                        break;
+                    }
+                }
+            }
             
-            // If we have variable bounds, use them to generate test data
-            if (uop->arg.var.vmax > uop->arg.var.vmin) {
-                float* data = (float*)result->data;
-                // Use a value within the bounds for testing
-                data[0] = (uop->arg.var.vmin + uop->arg.var.vmax) / 2.0f;
+            // Fallback if no binding found
+            if (!result) {
+                result = np_ones(1, &(size_t){1}, &dtypes.float32);
+                
+                // If we have variable bounds, use them to generate test data
+                if (uop->arg.var.vmax > uop->arg.var.vmin) {
+                    float* data = (float*)result->data;
+                    // Use a value within the bounds for testing
+                    data[0] = (uop->arg.var.vmin + uop->arg.var.vmax) / 2.0f;
+                }
             }
             break;
         }

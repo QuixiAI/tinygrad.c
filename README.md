@@ -75,8 +75,8 @@ reference/              # Original tinygrad Python source (for reference only)
 
 **Quick build:**
 ```bash
-./build.sh    # Configure and build project
-./test.sh     # Run all tests
+make          # Configure (via Conan in Docker) and build
+make test     # Run all tests with dot-reporter
 ```
 
 **Manual build:**
@@ -93,7 +93,7 @@ Tests use the Unity framework and are built as executables registered with `ctes
 
 **Run all tests:**
 ```bash
-./test.sh
+make test
 ```
 
 **Run individual tests:**

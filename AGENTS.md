@@ -7,8 +7,8 @@ Think of AGENTS.md as a README for agents: a dedicated, predictable place to pro
 ## Setup commands
 
 ### Build and test commands
-- Build project: `./build.sh`
-- Run all tests: `./test.sh`
+- Build project: `make`
+- Run all tests: `make test`
 - Run specific tests: `./build/test_dtype`, `./build/test_tensor`, `./build/test_ops`, `./build/test_resnet18`
 - Run examples: `./build/resnet18_cpu`
 
@@ -27,8 +27,7 @@ The project uses Unity test framework with Test-Driven Development (TDD) approac
 
 Run tests with:
 ```bash
-./test.sh          # Dot-reporter style with summary
-./test.sh -p       # Run tests in parallel
+make test          # Dot-reporter style with summary
 ./build/test_NAME  # Run individual test suite
 ```
 
@@ -76,7 +75,7 @@ The project follows Test-Driven Development with Unity framework:
 - `tests/test_uop.c` - Comprehensive UOp test suite
 
 ### Build system
-- `build.sh` - Main build script (recommended)
+- `Makefile` - Main entrypoint (build, test, clean)
 - `CMakeLists.txt` - Build configuration
 - Code generation for language bindings via `tinygradc_manifest`
 
@@ -134,7 +133,7 @@ Common Unity assertions:
 
 ### Running tests
 After making changes:
-1. Run `./test.sh` to see dot-reporter output
+1. Run `make test` to see dot-reporter output
 2. Failed tests show detailed error messages
 3. Crashed tests marked with `X` indicate segfaults
 4. Check specific suite with `./build/test_NAME`
@@ -156,7 +155,7 @@ When implementing features, compare against the reference Python implementation 
 ## Contribution instructions
 
 ### Before committing
-- Run `./test.sh` and ensure all tests pass or test count increases
+- Run `make test` and ensure all tests pass or test count increases
 - Verify no new memory leaks with valgrind if available
 - Check that the UOp system maintains reference counting integrity
 
