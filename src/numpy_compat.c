@@ -1,6 +1,8 @@
 #include "numpy_compat.h"
 #include <string.h>
 #include <assert.h>
+#include <stdio.h>
+#include <math.h>
 
 np_array_t* np_frombuffer(void* buffer, size_t size, const DType* dtype) {
     np_array_t* arr = calloc(1, sizeof(np_array_t));
@@ -12,6 +14,8 @@ np_array_t* np_frombuffer(void* buffer, size_t size, const DType* dtype) {
     arr->shape[0] = arr->size;
     arr->strides = calloc(1, sizeof(size_t));
     arr->strides[0] = dtype->itemsize;
+    // Mark as externally-owned buffer to avoid free in np_free
+    arr->block = (gsl_block*)0x1;
     return arr;
 }
 
@@ -86,6 +90,12 @@ np_array_t* np_ones(size_t ndim, const size_t* shape, const DType* dtype) {
     return arr;
 }
 
+np_array_t* np_array_copy(size_t ndim, const size_t* shape, const DType* dtype, const void* src){
+    np_array_t* arr = np_empty(ndim, shape, dtype);
+    memcpy(arr->data, src, arr->size * dtype->itemsize);
+    return arr;
+}
+
 bool np_allclose(np_array_t* a, np_array_t* b, double rtol, double atol) {
     if (!dtype_eq(&a->dtype, &b->dtype) || a->size != b->size) {
         return false;
@@ -116,6 +126,14 @@ bool np_allclose(np_array_t* a, np_array_t* b, double rtol, double atol) {
     return true;
 }
 
+int np_assert_allclose(np_array_t* a, np_array_t* b, double rtol, double atol){
+    if (!np_allclose(a,b,rtol,atol)){
+        fprintf(stderr, "np_assert_allclose failed: size=%zu dtype=(%s vs %s)\n", a->size, dtype_name(&a->dtype), dtype_name(&b->dtype));
+        return 1;
+    }
+    return 0;
+}
+
 void np_free(np_array_t* arr) {
     if (!arr) return;
     if (!arr->block && arr->data) free(arr->data);
@@ -127,3 +145,51 @@ void np_free(np_array_t* arr) {
 void* np_data(np_array_t* arr) { return arr ? arr->data : NULL; }
 
 np_array_t* np_require_c_contiguous(np_array_t* arr) { return arr; }
+
+void np_set_printoptions(int precision){ (void)precision; }
+
+const char* np_dtype_name(const DType* dt){ return dtype_name(dt); }
+const DType* np_dtype_from_name(const char* name){
+    static DType none = {0};
+    DType dt = to_dtype(name);
+    // Return pointer to canonical instance by scanning dtypes list for matching name
+    for (int i=0;i<17;i++){
+        const DType* cand = dtypes.all[i];
+        if (dtype_eq(&dt, cand)) return cand;
+    }
+    // Fallback to default float if unknown
+    return dtypes.default_float;
+}
+
+// Optional GSL conversions
+np_array_t* np_from_gsl_matrix(gsl_matrix* m, const DType* dtype){
+    if (!m) return NULL;
+    size_t shape[2] = { m->size1, m->size2 };
+    np_array_t* arr = np_empty(2, shape, dtype);
+    // Share block to avoid double free
+    if (arr->data) free(arr->data);
+    arr->data = m->data; arr->block = m->block;
+    return arr;
+}
+np_array_t* np_from_gsl_vector(gsl_vector* v, const DType* dtype){
+    if (!v) return NULL;
+    size_t shape[1] = { v->size };
+    np_array_t* arr = np_empty(1, shape, dtype);
+    if (arr->data) free(arr->data);
+    arr->data = v->data; arr->block = v->block;
+    return arr;
+}
+gsl_matrix* np_to_gsl_matrix(np_array_t* arr){
+    if (!arr || arr->ndim!=2) return NULL;
+    gsl_matrix_view view = gsl_matrix_view_array((double*)arr->data, arr->shape[0], arr->shape[1]);
+    return &view.matrix; // Warning: temporary view; use immediately
+}
+gsl_vector* np_to_gsl_vector(np_array_t* arr){
+    if (!arr || arr->ndim!=1) return NULL;
+    gsl_vector_view view = gsl_vector_view_array((double*)arr->data, arr->shape[0]);
+    return &view.vector; // Warning: temporary view; use immediately
+}
+// Expose a tiny `np_testing` namespace to mimic `np.testing`
+const np_testing_t np_testing = {
+    .assert_allclose = np_assert_allclose
+};

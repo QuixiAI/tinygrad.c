@@ -205,6 +205,37 @@ This porting order has been **validated through direct analysis** of Python impo
 - Test each phase thoroughly before moving to the next
 - `make test` is quiet; all compiler warnings resolved
 
+## NumPy Shim Mapping (numpy_compat)
+
+Use these drop-in equivalents to port Python code that calls NumPy:
+
+- Array creation:
+  - np.empty(shape, dtype) → `np_empty(ndim, shape, dtype)`
+  - np.zeros(shape, dtype) → `np_zeros(ndim, shape, dtype)`
+  - np.ones(shape, dtype) → `np_ones(ndim, shape, dtype)`
+  - np.array(buf, dtype=..., copy=True) → `np_array_copy(ndim, shape, dtype, src)`
+  - np.frombuffer(buf, dtype=...) → `np_frombuffer(buf, nbytes, dtype)`
+
+- Buffer/contiguity:
+  - np.require(x, requirements='C').data → `np_data(np_require_c_contiguous(x))`
+  - memoryview(np.require(...).data) → `np_data(...)` (memoryview not needed in C)
+
+- DType interop (np.dtype):
+  - np.dtype(dt).name → `np_dtype_name(dt)`
+  - np.dtype(name).type → `np_dtype_from_name(name)`
+
+- Printing/options:
+  - np.set_printoptions(precision=...) → `np_set_printoptions(precision)` (no-op stub)
+
+- Testing utilities:
+  - np.testing.assert_allclose(a, b, rtol=..., atol=...) → `np_testing.assert_allclose(a, b, rtol, atol)`
+  - np.allclose(a, b, rtol=..., atol=...) → `np_allclose(a, b, rtol, atol)`
+
+Guidance:
+- Pass `ndim` and `shape` explicitly; shapes are `size_t[]` in row-major order.
+- DType arguments use the existing `dtypes.*` objects (e.g., `&dtypes.float32`).
+- All arrays are C-contiguous; `np_require_c_contiguous` is a pass-through.
+
 ## Testing Strategy
 
 For each ported file:
