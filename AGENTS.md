@@ -12,6 +12,12 @@ Think of AGENTS.md as a README for agents: a dedicated, predictable place to pro
 - Run specific tests: `./build/test_dtype`, `./build/test_tensor`, `./build/test_ops`, `./build/test_resnet18`
 - Run examples: `./build/resnet18_cpu`
 
+Advanced:
+- `CLEAN=1 make` — fresh build dir (removes `build/`).
+- `PERSIST_CONAN=1 make` — persist Conan cache across runs by mounting `$HOME/.conan2` in Docker.
+- `CLEAN_CONAN=1 PERSIST_CONAN=1 make` — clear the mounted Conan cache before install.
+- `make rebuild` — alias for `CLEAN=1 make`.
+
 ### Manual build (if needed)
 ```bash
 cmake -S . -B build -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON
@@ -77,6 +83,7 @@ The project follows Test-Driven Development with Unity framework:
 ### Build system
 - `Makefile` - Main entrypoint (build, test, clean)
 - `CMakeLists.txt` - Build configuration
+- Conan profile at `profiles/linux-gcc11` and lockfiles under `profiles/locks/`
 - Code generation for language bindings via `tinygradc_manifest`
 
 ### Reference materials

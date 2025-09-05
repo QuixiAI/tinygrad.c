@@ -3,36 +3,13 @@
 
 #include "tg.h"
 #include "dtype/dtype.h"
+#include "uop/uop.h"
+#include "shape/shapetracker.h"
 #include <stdint.h>
 #include <stdbool.h>
 
-// Forward declarations
-typedef struct tg_uop tg_uop_t;
-
-// Internal UOp structure (define TG_UOP_INTERNAL to access)
-#ifdef TG_UOP_INTERNAL
-struct tg_uop {
-    int op;  // Use int for ops enum
-    const DType* dtype;
-    struct tg_uop** src;
-    int src_count;
-    union {
-        float const_value;
-        struct {
-            char* name;
-            float vmin;
-            float vmax;
-        } var;
-        struct {
-            int op;  // Use int for ops enum
-            int axes[8];
-            int axis_count;
-        } reduce;
-        int axis;
-    } arg;
-    int ref_count;
-};
-#endif
+// Unify tg_uop_t with core UOp structure
+typedef UOp tg_uop_t;
 typedef struct tg_gradient_result tg_gradient_result_t;
 // Note: tg_tensor_t is defined in tg.h as struct tg_tensor*
 typedef struct tg_substitution {
@@ -40,9 +17,9 @@ typedef struct tg_substitution {
     tg_uop_t* value;
 } tg_substitution_t;
 
-// UOp creation functions
-tg_uop_t* tg_uop_variable(const char* name, float vmin, float vmax, const DType* dtype);
-tg_uop_t* tg_uop_const(const DType* dtype, float value);
+// UOp creation functions (tg_dtype for tests' convenience)
+tg_uop_t* tg_uop_variable(const char* name, float vmin, float vmax, tg_dtype dtype);
+tg_uop_t* tg_uop_const(tg_dtype dtype, float value);
 tg_uop_t* tg_uop_const_like(tg_uop_t* template_uop, float value);
 
 // UOp unary operations
@@ -55,6 +32,11 @@ tg_uop_t* tg_uop_neg(tg_uop_t* x);
 tg_uop_t* tg_uop_cast(tg_uop_t* x, const DType* dtype);
 tg_uop_t* tg_uop_contiguous(tg_uop_t* x);
 tg_uop_t* tg_uop_flip(tg_uop_t* x, int axis);
+tg_uop_t* tg_uop_reshape(tg_uop_t* x, const int32_t* new_shape, int new_ndim);
+tg_uop_t* tg_uop_permute(tg_uop_t* x, const int32_t* axes, int num_axes);
+tg_uop_t* tg_uop_expand(tg_uop_t* x, const int32_t* target_shape, int target_ndim);
+tg_uop_t* tg_uop_pad(tg_uop_t* x, const int32_t* pad_before, const int32_t* pad_after, int ndim);
+tg_uop_t* tg_uop_shrink(tg_uop_t* x, const int32_t* start, const int32_t* end, int ndim);
 
 // UOp binary operations
 tg_uop_t* tg_uop_add(tg_uop_t* x, tg_uop_t* y);
@@ -75,6 +57,7 @@ tg_uop_t* tg_uop_ssimplify(tg_uop_t* uop);
 float tg_uop_get_float(tg_uop_t* uop);
 void tg_uop_free(tg_uop_t* uop);
 tg_uop_t** tg_uop_toposort(tg_uop_t* root, int* out_count);
+tg_uop_t* tg_uop_reduce_axis(tg_uop_t* src, int reduce_op, int* axes, int axes_count);
 
 // Gradient computation
 tg_gradient_result_t* tg_compute_gradient(tg_uop_t* expression, tg_uop_t* grad_seed, tg_uop_t** variables, int var_count);

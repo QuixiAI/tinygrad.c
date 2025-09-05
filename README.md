@@ -96,6 +96,16 @@ Tests use the Unity framework and are built as executables registered with `ctes
 make test
 ```
 
+Advanced
+- `CLEAN=1 make`: Removes `build/` before configuring (fresh build dir).
+- `PERSIST_CONAN=1 make`: Persist Conan cache across runs by mounting `$HOME/.conan2` into the Docker container.
+- `CLEAN_CONAN=1 PERSIST_CONAN=1 make`: Clear the mounted Conan cache before installing deps.
+- `make rebuild`: Alias for `CLEAN=1 make`.
+
+Notes
+- Conan always runs inside Docker; CMake builds/tests run on the host.
+- A checked-in Conan profile lives at `profiles/linux-gcc11`; a lockfile is created under `profiles/locks/` and used on installs for reproducible dependency resolution.
+
 **Run individual tests:**
 ```bash
 ./build/test_tensor
@@ -111,6 +121,17 @@ make test
 cd build
 ctest --output-on-failure
 ```
+
+---
+
+## Contributing
+
+- Run `make test` locally and keep tests green.
+- For a fresh build directory use `CLEAN=1 make` (alias: `make rebuild`).
+- For faster iterations, persist the Conan cache with `PERSIST_CONAN=1 make`.
+- To reset dependencies, combine `CLEAN_CONAN=1 PERSIST_CONAN=1 make`.
+
+These advanced toggles are optional; default `make` and `make test` remain one-command workflows.
 
 ---
 

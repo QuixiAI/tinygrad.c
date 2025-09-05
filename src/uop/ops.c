@@ -9,12 +9,7 @@
 
 #include "uop/uop.h"
 #include "uop/mathtraits.h"  // This provides the math_ops symbol
-
-// Forward declaration for ShapeTracker
-typedef struct ShapeTracker {
-    int shape[8];
-    int ndim;
-} ShapeTracker;
+#include "shape/shapetracker.h"
 
 // Line 1-10: imports
 // from __future__ import annotations
@@ -89,11 +84,36 @@ UOp* uop_new(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void
     }
     if (arg) {
         uop->arg = *arg;
-        // Deep copy axes data for REDUCE_AXIS operations
+        // Deep copy arrays inside arg based on type
         if (op == OPS_REDUCE_AXIS && arg->type == ARG_REDUCE && arg->reduce_data.axes) {
             uop->arg.reduce_data.axes = (int*)malloc(arg->reduce_data.axes_count * sizeof(int));
-            memcpy(uop->arg.reduce_data.axes, arg->reduce_data.axes, 
+            memcpy(uop->arg.reduce_data.axes, arg->reduce_data.axes,
                    arg->reduce_data.axes_count * sizeof(int));
+        }
+        if (op == OPS_PERMUTE && arg->type == ARG_REDUCE && arg->reduce_data.axes) {
+            uop->arg.reduce_data.axes = (int*)malloc(arg->reduce_data.axes_count * sizeof(int));
+            memcpy(uop->arg.reduce_data.axes, arg->reduce_data.axes,
+                   arg->reduce_data.axes_count * sizeof(int));
+        }
+        if (op == OPS_PAD && arg->type == ARG_PAD_PARAMS && arg->pad_data.ndim > 0) {
+            int n = arg->pad_data.ndim;
+            uop->arg.pad_data.ndim = n;
+            uop->arg.pad_data.before = (int32_t*)malloc(n * sizeof(int32_t));
+            uop->arg.pad_data.after  = (int32_t*)malloc(n * sizeof(int32_t));
+            memcpy(uop->arg.pad_data.before, arg->pad_data.before, n * sizeof(int32_t));
+            memcpy(uop->arg.pad_data.after,  arg->pad_data.after,  n * sizeof(int32_t));
+        }
+        if (op == OPS_SHRINK && arg->type == ARG_SHRINK_PARAMS && arg->shrink_data.ndim > 0) {
+            int n = arg->shrink_data.ndim;
+            uop->arg.shrink_data.ndim = n;
+            uop->arg.shrink_data.start = (int32_t*)malloc(n * sizeof(int32_t));
+            uop->arg.shrink_data.end   = (int32_t*)malloc(n * sizeof(int32_t));
+            memcpy(uop->arg.shrink_data.start, arg->shrink_data.start, n * sizeof(int32_t));
+            memcpy(uop->arg.shrink_data.end,   arg->shrink_data.end,   n * sizeof(int32_t));
+        }
+        // If a ShapeTracker was passed via arg (legacy), attach it to uop->st
+        if (arg->type == ARG_SHAPE_TRACKER && arg->st_data.st) {
+            uop->st = (ShapeTracker*)arg->st_data.st;
         }
     }
     uop->math_ops = &math_ops;  // Set this once, after all initialization
@@ -117,9 +137,20 @@ void uop_free(UOp* uop) {
             uop_unref(uop->src[i]);
         }
         if (uop->src) free(uop->src);
-        // Free axes data for REDUCE_AXIS operations
-        if (uop->op == OPS_REDUCE_AXIS && uop->arg.type == ARG_REDUCE && uop->arg.reduce_data.axes) {
+        // Free allocated arrays in arg
+        if ((uop->op == OPS_REDUCE_AXIS || uop->op == OPS_PERMUTE) && uop->arg.type == ARG_REDUCE && uop->arg.reduce_data.axes) {
             free(uop->arg.reduce_data.axes);
+        }
+        if (uop->op == OPS_PAD && uop->arg.type == ARG_PAD_PARAMS) {
+            free(uop->arg.pad_data.before);
+            free(uop->arg.pad_data.after);
+        }
+        if (uop->op == OPS_SHRINK && uop->arg.type == ARG_SHRINK_PARAMS) {
+            free(uop->arg.shrink_data.start);
+            free(uop->arg.shrink_data.end);
+        }
+        if (uop->st) {
+            shapetracker_free(uop->st);
         }
         // Note: We don't remove from cache here as cache holds weak refs
         free(uop);
@@ -455,14 +486,103 @@ UOp* uop_reduce_axis(UOp* src, Ops reduce_op, int* axes, int axes_count) {
 // Line 282-300: View operations
 UOp* uop_view(UOp* buf, ShapeTracker* st) {
     UOp* src[] = {buf};
-    UOpArg arg = {.type = ARG_SHAPE_TRACKER, .st_data.st = st};
-    return uop_new(OPS_VIEW, buf->dtype, src, 1, &arg, NULL);
+    UOpArg arg = {0};
+    UOp* u = uop_new(OPS_VIEW, buf->dtype, src, 1, &arg, NULL);
+    u->st = st;
+    return u;
 }
 
 UOp* uop_index(UOp* buf, UOp* idx) {
     UOp* src[] = {buf, idx};
     UOpArg arg = {0};
     return uop_new(OPS_INDEX, buf->dtype, src, 2, &arg, NULL);
+}
+
+// Movement ops: attach ShapeTracker to uop->st and keep params in arg
+UOp* uop_reshape(UOp* x, const int32_t* new_shape, int32_t new_ndim) {
+    ShapeTracker* cur = x->st;
+    ShapeTracker* st = cur ? shapetracker_reshape(cur, new_shape, new_ndim) : shapetracker_from_shape(new_shape, new_ndim);
+    UOpArg arg = {0}; UOp* src[] = {x};
+    UOp* u = uop_new(OPS_RESHAPE, x->dtype, src, 1, &arg, NULL);
+    u->st = st;
+    return u;
+}
+UOp* uop_permute(UOp* x, const int32_t* axes, int32_t num_axes) {
+    ShapeTracker* cur = x->st;
+    ShapeTracker* st = cur ? shapetracker_permute(cur, axes, num_axes) : NULL;
+    // Store axes in arg
+    UOpArg arg = {.type = ARG_REDUCE};
+    arg.reduce_data.axes_count = num_axes;
+    if (num_axes > 0) {
+        arg.reduce_data.axes = (int*)malloc(num_axes * sizeof(int));
+        for (int i = 0; i < num_axes; i++) arg.reduce_data.axes[i] = axes[i];
+    }
+    UOp* src[] = {x};
+    UOp* u = uop_new(OPS_PERMUTE, x->dtype, src, 1, &arg, NULL);
+    if (num_axes > 0) { free(arg.reduce_data.axes); }
+    u->st = st;
+    return u;
+}
+UOp* uop_expand(UOp* x, const int32_t* target_shape, int32_t target_ndim) {
+    ShapeTracker* cur = x->st;
+    ShapeTracker* st = cur ? shapetracker_expand(cur, target_shape, target_ndim) : shapetracker_from_shape(target_shape, target_ndim);
+    UOpArg arg = {0}; UOp* src[] = {x};
+    UOp* u = uop_new(OPS_EXPAND, x->dtype, src, 1, &arg, NULL);
+    u->st = st;
+    return u;
+}
+UOp* uop_pad(UOp* x, const int32_t* pad_before, const int32_t* pad_after, int32_t ndim) {
+    ShapeTracker* cur = x->st;
+    ShapeTracker* st = cur ? shapetracker_pad(cur, pad_before, pad_after, ndim) : NULL;
+    UOpArg arg={.type=ARG_PAD_PARAMS};
+    arg.pad_data.ndim = ndim;
+    if (ndim>0) {
+        arg.pad_data.before = (int32_t*)malloc(ndim*sizeof(int32_t));
+        arg.pad_data.after  = (int32_t*)malloc(ndim*sizeof(int32_t));
+        for (int i=0;i<ndim;i++){ arg.pad_data.before[i]=pad_before[i]; arg.pad_data.after[i]=pad_after[i]; }
+    }
+    UOp* src[] = {x};
+    UOp* u = uop_new(OPS_PAD, x->dtype, src, 1, &arg, NULL);
+    if (ndim>0){ free(arg.pad_data.before); free(arg.pad_data.after); }
+    u->st = st;
+    return u;
+}
+UOp* uop_shrink(UOp* x, const int32_t* start, const int32_t* end, int32_t ndim) {
+    ShapeTracker* cur = x->st;
+    ShapeTracker* st = cur ? shapetracker_shrink(cur, start, end, ndim) : NULL;
+    UOpArg arg={.type=ARG_SHRINK_PARAMS};
+    arg.shrink_data.ndim = ndim;
+    if (ndim>0) {
+        arg.shrink_data.start = (int32_t*)malloc(ndim*sizeof(int32_t));
+        arg.shrink_data.end   = (int32_t*)malloc(ndim*sizeof(int32_t));
+        for (int i=0;i<ndim;i++){ arg.shrink_data.start[i]=start[i]; arg.shrink_data.end[i]=end[i]; }
+    }
+    UOp* src[] = {x};
+    UOp* u = uop_new(OPS_SHRINK, x->dtype, src, 1, &arg, NULL);
+    if (ndim>0){ free(arg.shrink_data.start); free(arg.shrink_data.end); }
+    u->st = st;
+    return u;
+}
+UOp* uop_flip_axis(UOp* x, int axis) {
+    ShapeTracker* cur = x->st;
+    ShapeTracker* st = NULL;
+    if (cur){ int32_t ndim = shapetracker_ndim(cur); bool* axes = (bool*)calloc(ndim, sizeof(bool)); if (axis>=0 && axis<ndim) axes[axis]=true; st = shapetracker_flip(cur, axes, ndim); free(axes); }
+    UOpArg arg = {.type = ARG_INT}; arg.int_data.i = axis; UOp* src[] = {x};
+    UOp* u = uop_new(OPS_FLIP, x->dtype, src, 1, &arg, NULL);
+    u->st = st;
+    return u;
+}
+
+const int32_t* uop_shape(UOp* uop, int* ndim_out){
+    if (!uop) { if (ndim_out) *ndim_out = 0; return NULL; }
+    if (uop->st){
+        const ShapeTracker* st = uop->st;
+        const int32_t* shp = shapetracker_shape(st);
+        if (ndim_out) *ndim_out = shapetracker_ndim(st);
+        return shp;
+    }
+    if (ndim_out) *ndim_out = 0;
+    return NULL;
 }
 
 // Helper function for topological sort

@@ -115,3 +115,15 @@ bool np_allclose(np_array_t* a, np_array_t* b, double rtol, double atol) {
     }
     return true;
 }
+
+void np_free(np_array_t* arr) {
+    if (!arr) return;
+    if (!arr->block && arr->data) free(arr->data);
+    if (arr->shape) free(arr->shape);
+    if (arr->strides) free(arr->strides);
+    free(arr);
+}
+
+void* np_data(np_array_t* arr) { return arr ? arr->data : NULL; }
+
+np_array_t* np_require_c_contiguous(np_array_t* arr) { return arr; }

@@ -32,8 +32,10 @@ target_link_libraries(numpy_compat PUBLIC GSL::gsl GSL::gslcblas)
 # ---- Core object libraries ----
 add_library(tg_tensor OBJECT
   src/tensor/tensor.c
+  src/tensor/tensor_autograd.c
 )
 target_include_directories(tg_tensor PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(tg_tensor PUBLIC numpy_compat GSL::gsl GSL::gslcblas)
 
 add_library(tg_engine OBJECT
   src/engine/graph.c
@@ -146,6 +148,8 @@ if(BUILD_TESTS)
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/tests
   )
+  # Ensure Unity supports float/double in tests
+  target_compile_definitions(test_common INTERFACE UNITY_INCLUDE_DOUBLE UNITY_INCLUDE_FLOAT)
   target_link_libraries(test_common INTERFACE tinygradc unity::unity)
 
   # Discover and register tests

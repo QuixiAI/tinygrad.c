@@ -3,12 +3,15 @@
 ## Tinygrad C Port - File Porting Order
 **Based on actual Python import analysis**
 
-### 🎉 Major Milestone Achieved
-**The entire UOp subsystem has been faithfully ported from Python to C with 100% test coverage!**
-- All 288 tests passing (including UOp, shape, tensor, and integration tests)
-- Complete implementation of exec_alu, vmin/vmax bounds propagation, pattern matching, and symbolic simplification
-- Faithful line-by-line port maintaining exact Python semantics
-- All compiler warnings resolved
+### 🎉 Major Milestones
+1) UOp + ShapeTracker + Interpreter: faithfully ported and green.
+2) Gradient system: line‑for‑line movement + binary rules; all gradient tests passing.
+3) Tensor autograd layer: core ops ported; broadcasting via reshape+expand.
+
+- All 314 tests passing locally (UOp, shape, gradient, tensor, and integration tests)
+- exec_alu, vmin/vmax propagation, pattern matching, and symbolic simplification complete
+- Movement ops carry ShapeTracker on UOp; interpreter implements movement + broadcasting
+- `make test` is quiet and prints a concise summary
 
 This document outlines the definitive order for porting tinygrad Python files to C, organized by dependency levels. This order has been validated through direct analysis of import statements in each Python file.
 
@@ -49,10 +52,11 @@ These files have no internal tinygrad dependencies and must be ported first:
   - **Implemented:** View creation, manipulation, masking, and UOp conversion
 
 ## Phase 5: Device System & Gradient (Parallel to advanced UOp)
+- [x] `gradient.py` → `src/gradient/gradient.c` - Automatic differentiation ✅
+  - **Depends on:** `tinygrad.uop.ops`, `tinygrad.helpers`, ShapeTracker
+  - Implemented pm rules (unary/binary/movement), reduce_gradient, deepwalk, and compute_gradient
 - [ ] `device.py` → `src/device/device.c` - Device abstraction layer
   - **Depends on:** `tinygrad.helpers`, `tinygrad.dtype`, `tinygrad.renderer`
-- [ ] `gradient.py` → `src/engine/autograd.c` - Automatic differentiation
-  - **Depends on:** `tinygrad.uop.ops`, `tinygrad.helpers`
 
 ## Phase 6: Advanced UOp Operations
 - [x] `uop/symbolic.py` → `src/uop/symbolic.c` - Symbolic math and simplification ✅
@@ -140,7 +144,7 @@ These files have no internal tinygrad dependencies and must be ported first:
 
 ## Current Implementation Status
 
-### ✅ Completed Modules (14 files - 100% faithful ports)
+### ✅ Completed Modules (selected; faithful ports)
 1. **helpers.py** - Foundation utilities ✅
 2. **dtype.py** - Data type system with all dtypes ✅
 3. **uop/__init__.py** - UOp enum definitions (100+ operations) ✅
@@ -153,16 +157,18 @@ These files have no internal tinygrad dependencies and must be ported first:
 10. **uop/optional.py** - Optional optimizations and rewrites ✅
 11. **shape/view.py** - Tensor view operations with masking ✅
 12. **shape/shapetracker.py** - Shape tracking and composition ✅
-13. **runtime/ops_cpu.py** - Full CPU backend with optimized kernels ✅
-14. **nn/sgd.py** - SGD optimizer with momentum and weight decay ✅
+13. **gradient/gradient.py** → `src/gradient/gradient.c` - Symbolic gradient rules and engine ✅
+14. **runtime/uop_interpreter** → `src/runtime/uop_interpreter.c` - Simple interpreter with broadcasting + movement ✅
+15. **tensor/tensor (autograd subset)** → `src/tensor/tensor_autograd.c` - Core Tensor ops + gradients ✅
+16. **runtime/ops_cpu.py** - Full CPU backend with optimized kernels ✅
+17. **nn/sgd.py** - SGD optimizer with momentum and weight decay ✅
 
-**Test Status:** All 288 tests passing (100% coverage)
+**Test Status:** All 314 tests passing
 
 ### 🚧 Next Priority Items
-1. **device.py** - Device abstraction layer (currently stubbed)
-2. **gradient.py** - Automatic differentiation (partially implemented in autograd.c)
-3. **tensor.py** - Main Tensor class (currently stubbed)
-4. **engine/realize.py** - Tensor realization
+1. **device.py** - Device abstraction layer (refine as needed)
+2. **renderer** - CStyle/PTX/WGSL backends (build-out as needed)
+3. **engine/realize.py** - Tensor realization
 
 ## Critical Path for ResNet-18 CPU Training
 
@@ -177,7 +183,7 @@ For the specific goal of ResNet-18 training on CPU, focus on this minimal valida
 7. **Phase 7**: `shape/shapetracker.py` ✅ (shape composition)
 8. **Phase 8-9**: Basic renderers and engine components (mostly stubbed)
 9. **Phase 13**: `runtime/ops_cpu.py` ✅ (fully implemented)
-10. **Phase 14**: `tensor.py` (needs implementation)
+10. **Phase 14**: `tensor.py` (core autograd subset implemented)
 11. **Phase 15**: `nn/layers.c` (Conv2d, BatchNorm, Linear, ReLU - stubbed)
 12. **Phase 15**: `nn/sgd.py` ✅ (SGD optimizer implemented)
 
@@ -197,7 +203,7 @@ This porting order has been **validated through direct analysis** of Python impo
 - **Dependencies explicitly validated** - no guesswork
 - Start with concrete implementations before adding symbolic support
 - Test each phase thoroughly before moving to the next
-- All compiler warnings have been resolved
+- `make test` is quiet; all compiler warnings resolved
 
 ## Testing Strategy
 

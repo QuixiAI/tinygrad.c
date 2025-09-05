@@ -158,7 +158,9 @@ typedef enum {
     ARG_INT,
     ARG_REDUCE,
     ARG_SHAPE_TRACKER,
-    ARG_VAR  // For variables with ranges
+    ARG_VAR,           // For variables with ranges
+    ARG_PAD_PARAMS,    // For PAD: before/after per-dim
+    ARG_SHRINK_PARAMS  // For SHRINK: start/end per-dim
 } UOpArgType;
 
 typedef struct UOpArg {
@@ -183,6 +185,16 @@ typedef struct UOpArg {
             int64_t vmin;  // Variable min value - Python line 422
             int64_t vmax;  // Variable max value - Python line 422
         } var;  // For DEFINE_VAR arguments
+        struct {
+            int32_t* before;
+            int32_t* after;
+            int32_t ndim;
+        } pad_data;
+        struct {
+            int32_t* start;
+            int32_t* end;
+            int32_t ndim;
+        } shrink_data;
     };
 } UOpArg;
 
@@ -224,6 +236,7 @@ typedef struct UOp {
     UOp** src;
     size_t src_count;
     UOpArg arg;
+    struct ShapeTracker* st;  // attached ShapeTracker for movement/view ops
     const MathTraitOps* math_ops;
     int ref_count;
     // Symbolic range tracking - Python line 472-474
@@ -361,6 +374,16 @@ UOp* uop_mod(UOp* a, UOp* b);
 UOp* uop_gt(UOp* a, UOp* b);
 UOp* uop_view(UOp* buf, struct ShapeTracker* st);
 UOp* uop_index(UOp* buf, UOp* idx);
+// Movement ops
+UOp* uop_reshape(UOp* x, const int32_t* new_shape, int32_t new_ndim);
+UOp* uop_permute(UOp* x, const int32_t* axes, int32_t num_axes);
+UOp* uop_expand(UOp* x, const int32_t* target_shape, int32_t target_ndim);
+UOp* uop_pad(UOp* x, const int32_t* pad_before, const int32_t* pad_after, int32_t ndim);
+UOp* uop_shrink(UOp* x, const int32_t* start, const int32_t* end, int32_t ndim);
+UOp* uop_flip_axis(UOp* x, int axis);
+
+// Shape helper (reads from ARG_SHAPE_TRACKER if present). Returns NULL if unknown.
+const int32_t* uop_shape(UOp* uop, int* ndim_out);
 UOp* uop_var(const char* name, DType dtype);
 UOp* uop_var_with_range(const char* name, DType dtype, int min_val, int max_val);
 UOp* uop_range(UOp* n, int idx);

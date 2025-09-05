@@ -3,23 +3,30 @@ DOCKER_IMAGE ?= conanio/gcc11-ubuntu16.04:2.20.1
 
 .PHONY: all build rebuild test clean realclean
 
-all: rebuild
+all: build
 
-# Full rebuild matching build.sh exactly
-rebuild:
+# Build (keeps build/ by default). Use CLEAN=1 to force a fresh build dir.
+build:
 	set -euo pipefail; \
-	rm -rf build; \
+	if [ "${CLEAN:-0}" = "1" ]; then rm -rf build; fi; \
+	DOCKER_EXTRA=""; \
+	if [ "${PERSIST_CONAN:-0}" = "1" ]; then mkdir -p "$$HOME/.conan2"; DOCKER_EXTRA="-v $$HOME/.conan2:/cache/.conan2 -e CONAN_HOME=/cache/.conan2"; fi; \
 	docker run --rm \
 	  -v "$$PWD":/work -w /work \
+	  $$DOCKER_EXTRA \
+	  -e CLEAN_CONAN \
 	  --user "`id -u`":"`id -g`" \
 	  "$(DOCKER_IMAGE)" \
 	  bash -lc ' \
-	    rm -rf ~/.conan2; \
-	    conan profile detect --force; \
-	    printf "include(default)\n[buildenv]\nCFLAGS=-DUNITY_INCLUDE_DOUBLE -DUNITY_INCLUDE_FLOAT\n" > ~/.conan2/profiles/custom; \
+	    if [ "${CLEAN_CONAN:-0}" = "1" ]; then rm -rf "${CONAN_HOME:-~/.conan2}"; fi; \
+	    mkdir -p build/conan/locks; \
+	    if [ ! -f build/conan/locks/linux-gcc11.lock ]; then \
+	      conan lock create . --profile=profiles/linux-gcc11 --lockfile-out=build/conan/locks/linux-gcc11.lock; \
+	    fi; \
 	    conan install . \
 	      -of build/conan \
-	      --profile=custom \
+	      --lockfile=build/conan/locks/linux-gcc11.lock \
+	      --profile=profiles/linux-gcc11 \
 	      --build=unity/* \
 	      --build=missing \
 	      -g CMakeDeps -g CMakeToolchain \
@@ -34,13 +41,14 @@ rebuild:
 	  -DCMAKE_C_FLAGS="-DUNITY_INCLUDE_DOUBLE -DUNITY_INCLUDE_FLOAT"; \
 	cmake --build build -j
 
-# Backward-compatible alias
-build: rebuild
+rebuild: 
+	$(MAKE) CLEAN=1 build
 
 test:
-	set -e; \
+	@set -e; \
 	if [ ! -x build/test_tensor ]; then \
-	  $(MAKE) rebuild; \
+	  echo "Building tests quietly..."; \
+	  ($(MAKE) -s build > /dev/null 2>&1) || { echo "Build failed. Run 'make build' for full logs."; exit 1; }; \
 	fi; \
 	bash -lc ' \
 	  total_tests=0; total_passed=0; total_failed=0; total_ignored=0; failed_details=""; crashed_suites=""; \

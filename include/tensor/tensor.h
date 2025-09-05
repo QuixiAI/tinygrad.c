@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "tg.h"
+#include "gradient/gradient.h"
 
 typedef enum {
   TG_OP_NONE=0, TG_OP_ADD, TG_OP_RELU, TG_OP_MATMUL, TG_OP_CE
@@ -17,6 +18,7 @@ struct tg_ctx {
 struct tg_tensor {
   tg_ctx_t ctx;
   tg_dtype dtype;
+  const DType* np_dtype; /* numpy_compat dtype for autograd layer */
   int64_t *shape; int rank;
   size_t numel;
   float *data;
@@ -24,7 +26,7 @@ struct tg_tensor {
   int requires_grad;
   
   /* UOp representation for gradient computation */
-  struct tg_uop *uop;
+  tg_uop_t *uop;
 
   /* autograd links */
   tg_op_kind grad_op;

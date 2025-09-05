@@ -1,0 +1,16 @@
+{
+    "version": "0.5",
+    "requires": [
+        "unity/2.6.0#491bdaa725903d9cd01f15878c2790a0%1710599770.35",
+        "gsl/2.7.1#52104542e924a0bbe91bd2e227d1015d%1703783952.094"
+    ],
+    "build_requires": [
+        "m4/1.4.19#b38ced39a01e31fef5435bc634461fd2%1700758725.451",
+        "libtool/2.4.7#14e7739cc128bc1623d2ed318008e47e%1755679003.847",
+        "gnu-config/cci.20210814#69fde734e1a46fd1655b4af46ab40945%1746203214.947",
+        "automake/1.16.5#b91b7c384c3deaa9d535be02da14d04f%1755524470.56",
+        "autoconf/2.71#51077f068e61700d65bb05541ea1e4b0%1731054366.86"
+    ],
+    "python_requires": [],
+    "config_requires": []
+}
