@@ -4,7 +4,7 @@
 #include <string.h>
 #include <math.h>
 #include "gradient/gradient.h"
-#include "numpy_compat.h"
+#include "compat/numpy.h"
 #include "runtime/uop_interpreter.h"
 #include "tensor/tensor.h"
 

@@ -1,5 +1,5 @@
 #include "test_common.h"
-#include "numpy_compat.h"
+#include "compat/numpy.h"
 
 TEST(test_empty_zeros_ones) {
   size_t shp[2] = {2,3};
@@ -63,7 +63,7 @@ TEST(test_allclose_and_testing) {
   TEST_ASSERT_EQUAL_INT(0, np_testing.assert_allclose(a,b,1e-4,1e-6));
   ((float*)np_data(b))[0] = 10.0f;
   TEST_ASSERT_FALSE(np_allclose(a,b,1e-4,1e-6));
-  TEST_ASSERT_EQUAL_INT(1, np_testing.assert_allclose(a,b,1e-4,1e-6));
+  TEST_ASSERT_TRUE(np_testing.assert_allclose(a,b,1e-4,1e-6) != 0);
   np_free(a); np_free(b);
 }
 

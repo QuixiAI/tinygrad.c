@@ -20,9 +20,7 @@ build:
 	  bash -lc ' \
 	    if [ "${CLEAN_CONAN:-0}" = "1" ]; then rm -rf "${CONAN_HOME:-~/.conan2}"; fi; \
 	    mkdir -p build/conan/locks; \
-	    if [ ! -f build/conan/locks/linux-gcc11.lock ]; then \
-	      conan lock create . --profile=profiles/linux-gcc11 --lockfile-out=build/conan/locks/linux-gcc11.lock; \
-	    fi; \
+	    conan lock create . --profile=profiles/linux-gcc11 --lockfile-out=build/conan/locks/linux-gcc11.lock; \
 	    conan install . \
 	      -of build/conan \
 	      --lockfile=build/conan/locks/linux-gcc11.lock \

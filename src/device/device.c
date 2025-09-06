@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include "device/allocator.h"
+#include "helpers/helpers.h"
 
 // Backend registry scaffold (to mirror Python importlib of runtime backends)
 typedef const tg_allocator_t* (*get_allocator_fn)(const char*);
@@ -142,7 +143,7 @@ const char* tg_device_canonicalize(const char* device_str) {
 // Port of Python: @property def DEFAULT(self) -> str:
 static int _is_true_env(const char* name){ const char* v=getenv(name); if(!v) return 0; return strcmp(v,"1")==0 || strcasecmp(v,"true")==0 || strlen(v)>0; }
 const char* tg_device_get_default(void) {
-    if (default_device != NULL) return default_device;
+    if (default_device) { free(default_device); default_device = NULL; }
     // Mirror Python DEFAULT selection
     const char* dev = getenv("DEV");
     if (dev && *dev){
@@ -296,66 +297,7 @@ int tg_compiler_compile_cached(tg_compiler_t* compiler, const char* src, char** 
     return TG_SUCCESS;
 }
 
-// Simple in-memory cache for disk cache simulation
-typedef struct cache_entry {
-    char* key;
-    char* src;
-    char* data;
-    size_t data_size;
-    struct cache_entry* next;
-} cache_entry_t;
-
-static cache_entry_t* cache_head = NULL;
-
-int tg_diskcache_get(const char* key, const char* src, char** output, size_t* output_size) {
-    if (!key || !src || !output || !output_size) return TG_ERR_INVALID;
-    
-    // Search cache
-    cache_entry_t* entry = cache_head;
-    while (entry) {
-        if (strcmp(entry->key, key) == 0 && strcmp(entry->src, src) == 0) {
-            // Found in cache
-            *output = malloc(entry->data_size + 1);
-            if (!*output) return TG_ERR_NOMEM;
-            memcpy(*output, entry->data, entry->data_size);
-            (*output)[entry->data_size] = '\0';
-            *output_size = entry->data_size;
-            return TG_SUCCESS;
-        }
-        entry = entry->next;
-    }
-    
-    return TG_ERR_RUNTIME;  // Not found
-}
-
-int tg_diskcache_put(const char* key, const char* src, const char* data, size_t data_size) {
-    if (!key || !src || !data) return TG_ERR_INVALID;
-    
-    // Create new cache entry
-    cache_entry_t* entry = malloc(sizeof(cache_entry_t));
-    if (!entry) return TG_ERR_NOMEM;
-    
-    entry->key = strdup(key);
-    entry->src = strdup(src);
-    entry->data = malloc(data_size + 1);
-    if (!entry->key || !entry->src || !entry->data) {
-        if (entry->key) free(entry->key);
-        if (entry->src) free(entry->src);
-        if (entry->data) free(entry->data);
-        free(entry);
-        return TG_ERR_NOMEM;
-    }
-    
-    memcpy(entry->data, data, data_size);
-    entry->data[data_size] = '\0';
-    entry->data_size = data_size;
-    
-    // Add to cache list
-    entry->next = cache_head;
-    cache_head = entry;
-    
-    return TG_SUCCESS;
-}
+// diskcache_get/put moved to helpers/helpers.c
 
 int tg_context_set_compiler_cache(int enabled) {
     compiler_cache_enabled = enabled;

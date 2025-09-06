@@ -4,7 +4,7 @@
 #include <math.h>
 #include "gradient/gradient.h"
 #include "runtime/uop_interpreter.h"
-#include "numpy_compat.h"
+#include "compat/numpy.h"
 
 tg_uop_t* tg_uop_variable(const char* name, float vmin, float vmax, tg_dtype dtype) {
   (void)dtype; // only TG_F32 is supported; map to float32

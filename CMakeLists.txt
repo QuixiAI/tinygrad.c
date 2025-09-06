@@ -21,27 +21,55 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # ---- Find dependencies ----
 find_package(unity CONFIG REQUIRED)
 find_package(GSL CONFIG REQUIRED)
+find_package(ZLIB QUIET)
+find_package(CURL CONFIG QUIET)
+find_package(capstone CONFIG QUIET)
+# sqlite3 is optional; prefer Conan's CONFIG package, fallback to CMake module
+find_package(sqlite3 CONFIG QUIET)
+if (NOT sqlite3_FOUND)
+  find_package(SQLite3 QUIET)
+endif()
 
-# ---- numpy_compat library ----
-add_library(numpy_compat STATIC
-  src/numpy_compat.c
+# ---- numpy compat library ----
+add_library(numpy STATIC
+  src/compat/numpy.c
 )
-target_include_directories(numpy_compat PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(numpy_compat PUBLIC GSL::gsl GSL::gslcblas)
+target_include_directories(numpy PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/compat)
+target_link_libraries(numpy PUBLIC GSL::gsl GSL::gslcblas)
+
+# ---- tqdm library ----
+add_library(tqdm STATIC
+  src/compat/tqdm.c
+)
+target_include_directories(tqdm PUBLIC ${CMAKE_SOURCE_DIR}/src/compat)
+
+# ---- fetch library (optional CURL/ZLIB at compile time) ----
+add_library(fetch STATIC
+  src/compat/fetch.c
+)
+target_include_directories(fetch PUBLIC ${CMAKE_SOURCE_DIR}/src/compat)
+if (TARGET CURL::libcurl)
+  target_link_libraries(fetch PUBLIC CURL::libcurl)
+  target_compile_definitions(fetch PUBLIC TG_HAVE_CURL=1)
+endif()
+if (TARGET ZLIB::ZLIB)
+  target_link_libraries(fetch PUBLIC ZLIB::ZLIB)
+  target_compile_definitions(fetch PUBLIC TG_HAVE_ZLIB=1)
+endif()
 
 # ---- Core object libraries ----
 add_library(tg_tensor OBJECT
   src/tensor/tensor.c
   src/tensor/tensor_autograd.c
 )
-target_include_directories(tg_tensor PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(tg_tensor PUBLIC numpy_compat GSL::gsl GSL::gslcblas)
+target_include_directories(tg_tensor PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/compat)
+target_link_libraries(tg_tensor PUBLIC numpy GSL::gsl GSL::gslcblas)
 
 add_library(tg_engine OBJECT
   src/engine/graph.c
   src/engine/autograd.c
 )
-target_include_directories(tg_engine PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(tg_engine PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/compat)
 
 add_library(tg_ops_cpu OBJECT
   src/runtime/ops_cpu/ops.c
@@ -54,13 +82,13 @@ add_library(tg_ops_cpu OBJECT
   src/runtime/ops_cpu/kernels/linear.c
   src/runtime/uop_interpreter.c
 )
-target_include_directories(tg_ops_cpu PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(tg_ops_cpu PUBLIC numpy_compat GSL::gsl GSL::gslcblas)
+target_include_directories(tg_ops_cpu PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/compat)
+target_link_libraries(tg_ops_cpu PUBLIC numpy GSL::gsl GSL::gslcblas)
 
 add_library(tg_nn OBJECT
   src/nn/sgd.c
 )
-target_include_directories(tg_nn PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(tg_nn PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/compat)
 
 # ---- Stubbed modules (auto-discovered) ----
 file(GLOB STUB_DTYPE       CONFIGURE_DEPENDS src/dtype/*.c)
@@ -82,18 +110,42 @@ list(FILTER STUB_NN_EXTRA EXCLUDE REGEX ".*/sgd\\.c$")
 macro(add_stub_obj name files)
   if(${files})
     add_library(${name} OBJECT ${${files}})
-    target_include_directories(${name} PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(${name} PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/compat)
   endif()
 endmacro()
 
 add_stub_obj(tg_dtype         STUB_DTYPE)
 add_stub_obj(tg_shape         STUB_SHAPE)
 add_stub_obj(tg_helpers       STUB_HELPERS)
+if(TARGET tg_helpers)
+  if (TARGET ZLIB::ZLIB)
+    target_compile_definitions(tg_helpers PUBLIC TG_HAVE_ZLIB=1)
+  endif()
+  if (TARGET CURL::libcurl)
+    target_compile_definitions(tg_helpers PUBLIC TG_HAVE_CURL=1)
+  endif()
+  if (TARGET capstone::capstone OR TARGET Capstone::capstone)
+    target_compile_definitions(tg_helpers PUBLIC TG_HAVE_CAPSTONE=1)
+    if (TARGET capstone::capstone)
+      target_link_libraries(tg_helpers PUBLIC capstone::capstone)
+    elseif (TARGET Capstone::capstone)
+      target_link_libraries(tg_helpers PUBLIC Capstone::capstone)
+    endif()
+  endif()
+  if (TARGET sqlite3::sqlite3 OR TARGET SQLite::SQLite3)
+    target_compile_definitions(tg_helpers PUBLIC TG_HAVE_SQLITE3=1)
+    if (TARGET sqlite3::sqlite3)
+      target_link_libraries(tg_helpers PUBLIC sqlite3::sqlite3)
+    elseif (TARGET SQLite::SQLite3)
+      target_link_libraries(tg_helpers PUBLIC SQLite::SQLite3)
+    endif()
+  endif()
+endif()
 add_stub_obj(tg_device        STUB_DEVICE)
 add_stub_obj(tg_uop           STUB_UOP)
 add_stub_obj(tg_gradient      STUB_GRADIENT)
 if(TARGET tg_gradient)
-  target_link_libraries(tg_gradient PUBLIC numpy_compat GSL::gsl GSL::gslcblas)
+  target_link_libraries(tg_gradient PUBLIC numpy GSL::gsl GSL::gslcblas)
 endif()
 add_stub_obj(tg_codegen       STUB_CODEGEN)
 add_stub_obj(tg_codegen_opt   STUB_CODEGEN_OPT)
@@ -124,10 +176,32 @@ add_library(tinygradc STATIC
   $<$<TARGET_EXISTS:tg_runtime_graph>:$<TARGET_OBJECTS:tg_runtime_graph>>
   $<$<TARGET_EXISTS:tg_nn_extra>:$<TARGET_OBJECTS:tg_nn_extra>>
 )
-target_include_directories(tinygradc PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(tinygradc PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/compat)
 
-# Link numpy_compat and GSL to tinygradc
-target_link_libraries(tinygradc PUBLIC numpy_compat GSL::gsl GSL::gslcblas)
+# Link compat libs and GSL to tinygradc
+target_link_libraries(tinygradc PUBLIC numpy tqdm fetch GSL::gsl GSL::gslcblas)
+if (TARGET ZLIB::ZLIB)
+  target_link_libraries(tinygradc PUBLIC ZLIB::ZLIB)
+  target_compile_definitions(tinygradc PUBLIC TG_HAVE_ZLIB=1)
+endif()
+if (TARGET CURL::libcurl)
+  target_link_libraries(tinygradc PUBLIC CURL::libcurl)
+  target_compile_definitions(tinygradc PUBLIC TG_HAVE_CURL=1)
+endif()
+if (TARGET capstone::capstone)
+  target_link_libraries(tinygradc PUBLIC capstone::capstone)
+  target_compile_definitions(tinygradc PUBLIC TG_HAVE_CAPSTONE=1)
+elseif (TARGET Capstone::capstone)
+  target_link_libraries(tinygradc PUBLIC Capstone::capstone)
+  target_compile_definitions(tinygradc PUBLIC TG_HAVE_CAPSTONE=1)
+endif()
+if (TARGET sqlite3::sqlite3)
+  target_link_libraries(tinygradc PUBLIC sqlite3::sqlite3)
+  target_compile_definitions(tinygradc PUBLIC TG_HAVE_SQLITE3=1)
+elseif (TARGET SQLite::SQLite3)
+  target_link_libraries(tinygradc PUBLIC SQLite::SQLite3)
+  target_compile_definitions(tinygradc PUBLIC TG_HAVE_SQLITE3=1)
+endif()
 
 # Link libm on Linux
 if(UNIX AND NOT APPLE)
@@ -146,11 +220,25 @@ if(BUILD_TESTS)
   target_include_directories(test_common INTERFACE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/compat
     ${CMAKE_SOURCE_DIR}/tests
   )
   # Ensure Unity supports float/double in tests
   target_compile_definitions(test_common INTERFACE UNITY_INCLUDE_DOUBLE UNITY_INCLUDE_FLOAT)
   target_link_libraries(test_common INTERFACE tinygradc unity::unity)
+  # Propagate optional feature macros to tests
+  if (TARGET ZLIB::ZLIB)
+    target_compile_definitions(test_common INTERFACE TG_HAVE_ZLIB=1)
+  endif()
+  if (TARGET CURL::libcurl)
+    target_compile_definitions(test_common INTERFACE TG_HAVE_CURL=1)
+  endif()
+  if (TARGET capstone::capstone OR TARGET Capstone::capstone)
+    target_compile_definitions(test_common INTERFACE TG_HAVE_CAPSTONE=1)
+  endif()
+  if (TARGET sqlite3::sqlite3 OR TARGET SQLite::SQLite3)
+    target_compile_definitions(test_common INTERFACE TG_HAVE_SQLITE3=1)
+  endif()
 
   # Discover and register tests
   file(GLOB_RECURSE TEST_SOURCES tests/*.c)

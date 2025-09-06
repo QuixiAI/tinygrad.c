@@ -38,15 +38,6 @@ int CAPTURING = 0;
 int VALIDATE_WITH_CPU = 0;
 int TRACEMETA = 0;
 
-// GlobalCounters struct
-struct {
-    int kernel_count;
-    int64_t global_ops;
-    int64_t global_mem;
-    double time_sum_s;
-    int64_t mem_used;
-} GlobalCounters = {0};
-
 // **************** Program Creation ****************
 // Port of lines 13-48
 
@@ -186,8 +177,10 @@ CompiledRunner* compiled_runner_new(ProgramSpec* p, void* precompiled, void* prg
         runner->lib = precompiled;
     } else {
         // Port of line 68-69: with cpu_profile(...): self.lib = Device[p.device].compiler.compile_cached(p.src)
+        int h = tg_cpu_profile_begin("compile", p->device, 0);
         Device* dev = device_get(p->device);
         runner->lib = device_compile_cached(dev, p->src);
+        tg_cpu_profile_end(h, 0);
     }
     
     // Port of line 70: if DEBUG >= 7: Device[p.device].compiler.disassemble(self.lib)
@@ -358,7 +351,9 @@ float buffer_copy_call(BufferCopy* self, Buffer** rawbufs, int rawbufs_count,
     clock_gettime(CLOCK_MONOTONIC, &start);
     
     // Port of line 117: self.copy(dest, src)
+    int h = tg_cpu_profile_begin("copy", dest->device, 1);
     self->copy(self, dest, src);
+    tg_cpu_profile_end(h, 0);
     
     // Port of line 118-120: synchronize if wait
     if (wait) {

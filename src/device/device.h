@@ -30,10 +30,6 @@ TG_API void tg_compiler_destroy(tg_compiler_t* compiler);
 TG_API int tg_compiler_compile(tg_compiler_t* compiler, const char* src, char** output, size_t* output_size);
 TG_API int tg_compiler_compile_cached(tg_compiler_t* compiler, const char* src, char** output, size_t* output_size);
 
-// Cache management
-TG_API int tg_diskcache_get(const char* key, const char* src, char** output, size_t* output_size);
-TG_API int tg_diskcache_put(const char* key, const char* src, const char* data, size_t data_size);
-
 // Context management for compiler cache
 TG_API int tg_context_set_compiler_cache(int enabled);
 TG_API int tg_context_get_compiler_cache(void);

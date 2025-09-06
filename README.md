@@ -170,6 +170,41 @@ Process exit automatically finalizes opened devices (registered via `atexit`) to
 
 ---
 
+## Helpers Runtime
+
+- Disk cache (helpers diskcache):
+  - `CACHEDB`: path to sqlite database (default: `build/cache/cache.db`).
+  - `CACHELEVEL`: 0 disables cache; 1 enables (default).
+  - Requires sqlite support (`TG_HAVE_SQLITE3`) or falls back to in-memory cache.
+
+- Profiling:
+  - `PROFILE`: non-empty enables profiling capture; disabled automatically on CI.
+  - `PROFILE_OUT`: output path for event dump (default: `build/profile.json`).
+  - C API: `tg_profile_set_enabled/get_enabled`, `tg_cpu_profile_begin/end`.
+
+- Fetch + downloads:
+  - Default downloads dir: `/raid/downloads` on tinybox, else `build/downloads[/subdir]`.
+  - `DISABLE_HTTP_CACHE`: non-empty disables using a cached file (forces re-download).
+  - Requires `TG_HAVE_CURL` (HTTP/S) and `TG_HAVE_ZLIB` (gunzip) for full functionality; local file passthrough always supported.
+
+Example: fetch and gunzip a local .gz
+```c
+#include "helpers/helpers.h"
+char path[512];
+int rc = tg_fetch("./file.txt.gz", NULL, NULL, /*gunzip*/1, /*allow_caching*/1, path, sizeof(path));
+if (rc == 0) {
+  // path now points to "./file.txt.gz.gunzip"
+}
+```
+
+Example: download with caching (requires libcurl + zlib)
+```c
+char path[512];
+int rc = tg_fetch("https://example.com/model.gz", "model.gz", "weights", /*gunzip*/1, /*allow_caching*/1, path, sizeof(path));
+// Downloaded to build/downloads/weights/model.gz.gunzip (or /raid/downloads on tinybox)
+```
+
+
 ## License
 
 This project follows the license terms of the original [tinygrad](https://github.com/tinygrad/tinygrad) (MIT license).

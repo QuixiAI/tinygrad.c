@@ -1,7 +1,7 @@
 #pragma once
 
 #include "gradient/gradient.h"
-#include "numpy_compat.h"
+#include "compat/numpy.h"
 
 // Variable binding for the interpreter
 typedef struct {
