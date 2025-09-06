@@ -113,10 +113,15 @@ DType dtype_scalar(const DType* dt);
 int dtype_nbytes(const DType* dt); // throws error for non-ptr types
 double dtype_min_val(const DType* dt);
 double dtype_max_val(const DType* dt);
+// Properties parity helpers
+const DType* dtype_base(const DType* dt);
+int dtype_vcount(const DType* dt);
 
 // PtrDType methods
 int ptrdtype_nbytes(const PtrDType* dt);
-DType ptrdtype_vec(const PtrDType* dt, int sz);
+PtrDType ptrdtype_vec(const PtrDType* dt, int sz);
+const DType* ptrdtype_base(const PtrDType* dt);
+int ptrdtype_vcount(const PtrDType* dt);
 
 // ImageDType methods
 ImageDType imagedtype_create(const int* shape, int shape_len, bool is_half);
@@ -185,6 +190,11 @@ const char* dtype_name(const DType* dt);
 
 // DTYPES_DICT equivalent - get canonical name for dtype
 const char* dtype_canonical_name(const DType* dt);
+
+// dtypes.fields() equivalent (iterate canonical types)
+int dtypes_fields_count(void);
+const DType* dtypes_field_dtype(int index);
+const char* dtypes_field_name(int index);
 
 // Initialization and cleanup
 void dtypes_init(void);

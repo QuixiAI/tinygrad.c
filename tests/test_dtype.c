@@ -2,6 +2,7 @@
 #include <assert.h>
 #include "dtype/dtype.h"
 #include "helpers/helpers.h"
+#include <float.h>
 
 // Constants from test_dtype_spec.py
 #define FP8E4M3_MAX 448.0
@@ -371,6 +372,22 @@ TEST(test_string_conversion) {
     
     result = to_dtype("int");
     TEST_ASSERT_TRUE(dtype_eq(&result, &dtypes.int32));
+
+    // Additional alias and canonical coverage
+    result = to_dtype("double");
+    TEST_ASSERT_TRUE(dtype_eq(&result, &dtypes.float64));
+    result = to_dtype("half");
+    TEST_ASSERT_TRUE(dtype_eq(&result, &dtypes.float16));
+    result = to_dtype("uchar");
+    TEST_ASSERT_TRUE(dtype_eq(&result, &dtypes.uint8));
+    result = to_dtype("long");
+    TEST_ASSERT_TRUE(dtype_eq(&result, &dtypes.int64));
+    result = to_dtype("bfloat16");
+    TEST_ASSERT_TRUE(dtype_eq(&result, &dtypes.bfloat16));
+    result = to_dtype("fp8e4m3");
+    TEST_ASSERT_TRUE(dtype_eq(&result, &dtypes.fp8e4m3));
+    result = to_dtype("Fp8E5M2"); // mixed case
+    TEST_ASSERT_TRUE(dtype_eq(&result, &dtypes.fp8e5m2));
 }
 
 TEST(test_comprehensive_dtype_features) {
@@ -398,6 +415,98 @@ TEST(test_comprehensive_dtype_features) {
     truncated = dtypes_as_const_float(1.5, &dtypes.float16);
     TEST_ASSERT_DOUBLE_WITHIN(0.01, 1.5, truncated);
 }
+
+// Additional parity tests for vec-naming and PtrDType.vec behavior
+TEST(test_vec_name_and_cache) {
+    DType v4a = dtype_vec(&dtypes.float32, 4);
+    DType v4b = dtype_vec(&dtypes.float32, 4);
+    // name must be canonical base + count, like "float324"
+    TEST_ASSERT_EQUAL_STRING("float324", dtype_name(&v4a));
+    // equality on repeated calls
+    TEST_ASSERT_TRUE(dtype_eq(&v4a, &v4b));
+}
+
+TEST(test_ptrdtype_vec_basic) {
+    PtrDType p = dtype_ptr(&dtypes.float32, 16, ADDRSPACE_GLOBAL);
+    PtrDType pv = ptrdtype_vec(&p, 8);
+    TEST_ASSERT_EQUAL_INT(8, pv.v);
+    TEST_ASSERT_EQUAL_INT(16, pv.size);
+    TEST_ASSERT_TRUE(dtype_eq(&pv.base, &p.base));
+}
+
+TEST(test_ptrdtype_vec_image) {
+    int shp[2] = {2,2};
+    ImageDType im = dtypes_imageh(shp, 2);
+    PtrDType pv = ptrdtype_vec(&im.ptr_base, 8);
+    TEST_ASSERT_EQUAL_INT(8, pv.v);
+    TEST_ASSERT_EQUAL_STRING("imageh", dtype_name(&pv.base));
+}
+
+// Image LUB short-circuit and multi-arg parity
+TEST(test_lub_image_short_circuit) {
+    int shp[1] = {4};
+    ImageDType im = dtypes_imagef(shp, 1);
+    DType r1 = least_upper_dtype((const DType*)&im.ptr_base.base, &dtypes.int32);
+    TEST_ASSERT_EQUAL_STRING("imagef", dtype_name(&r1));
+    const DType* arr[3] = { (const DType*)&im.ptr_base.base, &dtypes.uint8, &dtypes.float16 };
+    DType r2 = least_upper_dtype_multi(arr, 3);
+    TEST_ASSERT_EQUAL_STRING("imagef", dtype_name(&r2));
+}
+
+// FP16 rounding: verify rounding slightly above midpoint goes up
+TEST(test_truncate_fp16_rounding_edges) {
+    double half_ulp = 0.00048828125; // 2^-11
+    double up = 0.0000001; // small epsilon above midpoint
+    TEST_ASSERT_FLOAT_WITHIN(1e-6f, 1.0009765625f, truncate_fp16(1.0 + half_ulp + up)); // 1 + 2^-10
+}
+
+// Test collections ordering/content against Python's definitions
+TEST(test_collections_ordering) {
+    // fp8s ordering
+    TEST_ASSERT_TRUE(dtypes.fp8s[0] == &dtypes.fp8e4m3);
+    TEST_ASSERT_TRUE(dtypes.fp8s[1] == &dtypes.fp8e5m2);
+    // floats ordering
+    TEST_ASSERT_TRUE(dtypes.floats[0] == &dtypes.fp8e4m3);
+    TEST_ASSERT_TRUE(dtypes.floats[1] == &dtypes.fp8e5m2);
+    TEST_ASSERT_TRUE(dtypes.floats[2] == &dtypes.float16);
+    TEST_ASSERT_TRUE(dtypes.floats[3] == &dtypes.bfloat16);
+    TEST_ASSERT_TRUE(dtypes.floats[4] == &dtypes.float32);
+    TEST_ASSERT_TRUE(dtypes.floats[5] == &dtypes.float64);
+    // ints ordering (uints then sints)
+    TEST_ASSERT_TRUE(dtypes.ints[0] == &dtypes.uint8);
+    TEST_ASSERT_TRUE(dtypes.ints[1] == &dtypes.uint16);
+    TEST_ASSERT_TRUE(dtypes.ints[2] == &dtypes.uint32);
+    TEST_ASSERT_TRUE(dtypes.ints[3] == &dtypes.uint64);
+    TEST_ASSERT_TRUE(dtypes.ints[4] == &dtypes.int8);
+    TEST_ASSERT_TRUE(dtypes.ints[5] == &dtypes.int16);
+    TEST_ASSERT_TRUE(dtypes.ints[6] == &dtypes.int32);
+    TEST_ASSERT_TRUE(dtypes.ints[7] == &dtypes.int64);
+}
+
+// (optional) can_safe_cast mapping is verified indirectly by dtype promotion tests.
+
+// FP8 conversion sanity: round-trip and saturation behaviors
+TEST(test_fp8_conversions_sanity) {
+    // e4m3
+    float z = (float)dtypes_truncate(0.0, &dtypes.fp8e4m3);
+    TEST_ASSERT_FLOAT_WITHIN(1e-8f, 0.0f, z);
+    float one = (float)dtypes_truncate(1.0, &dtypes.fp8e4m3);
+    TEST_ASSERT_TRUE(fabsf(one-1.0f) < 5e-2f); // within ~5e-2 quantization
+    float tiny = (float)dtypes_truncate(1e-10, &dtypes.fp8e4m3);
+    TEST_ASSERT_FLOAT_WITHIN(1e-8f, 0.0f, tiny);
+    float big = (float)dtypes_truncate(1e6, &dtypes.fp8e4m3);
+    TEST_ASSERT_TRUE(isfinite(big));
+    // e5m2
+    z = (float)dtypes_truncate(0.0, &dtypes.fp8e5m2);
+    TEST_ASSERT_FLOAT_WITHIN(1e-8f, 0.0f, z);
+    one = (float)dtypes_truncate(1.0, &dtypes.fp8e5m2);
+    TEST_ASSERT_TRUE(fabsf(one-1.0f) < 1e-1f);
+    tiny = (float)dtypes_truncate(1e-10, &dtypes.fp8e5m2);
+    TEST_ASSERT_FLOAT_WITHIN(1e-8f, 0.0f, tiny);
+    big = (float)dtypes_truncate(1e8, &dtypes.fp8e5m2);
+    TEST_ASSERT_TRUE(isfinite(big));
+}
+
 
 // Auto-register all test functions and run them
 TEST_MAIN()

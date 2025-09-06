@@ -249,6 +249,11 @@ if(BUILD_TESTS)
     add_test(NAME ${test_name} COMMAND ${test_name})
   endforeach()
 
+  # Tools for CI checks (not registered as tests)
+  add_executable(tool_default_float_invalid tools/ci/tool_default_float_invalid.c)
+  target_include_directories(tool_default_float_invalid PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(tool_default_float_invalid PRIVATE tinygradc)
+
   include(CTest)
   enable_testing()
 endif()

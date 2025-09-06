@@ -105,23 +105,30 @@ DType dtype_vec(const DType* dt, int sz) {
     // Python: def vec(self, sz:int) -> DType:
     assert(dt->count == 1); // can't vectorize already vectorized type
     if (sz == 1 || dtype_eq(dt, &dtypes.void_)) return *dt; // void doesn't vectorize, sz=1 is scalar
-    
+    // cache: (base, sz) -> vec dtype (identity parity similar to functools.cache)
+    typedef struct { const DType* base; int sz; DType vec; } _vec_cache_ent;
+    static _vec_cache_ent cache[128];
+    static int cache_n = 0;
+    for (int i=0;i<cache_n;i++) if (cache[i].base==dt && cache[i].sz==sz) return cache[i].vec;
+
     DType vec_dt = *dt;
     vec_dt.itemsize *= sz;
     vec_dt.count = sz;
     vec_dt._scalar = dt;
-    
-    // Update name to include vector size (simplified)
-    char vec_name[64]; // Increased size to avoid truncation
-    int written = snprintf(vec_name, sizeof(vec_name), "%s%d", dt->name, sz);
-    if (written >= (int)sizeof(vec_name)) {
-        // Truncation would occur, handle gracefully
-        vec_name[sizeof(vec_name) - 1] = '\0';
-    }
+    // Update name using canonical base name
+    const char* base = dtype_canonical_name(dt);
+    char vec_name[64];
+    int written = snprintf(vec_name, sizeof(vec_name), "%s%d", base ? base : dt->name, sz);
+    if (written >= (int)sizeof(vec_name)) vec_name[sizeof(vec_name) - 1] = '\0';
     strncpy(vec_dt.name, vec_name, sizeof(vec_dt.name) - 1);
     vec_dt.name[sizeof(vec_dt.name) - 1] = '\0';
-    vec_dt.fmt = 0; // vectorized types have no fmt
-    
+    vec_dt.fmt = 0;
+    // store in cache
+    if (cache_n < (int)(sizeof(cache)/sizeof(cache[0]))) {
+        cache[cache_n].base = dt; cache[cache_n].sz = sz; cache[cache_n].vec = vec_dt; cache_n++;
+    } else {
+        cache[cache_n%128].base = dt; cache[cache_n%128].sz = sz; cache[cache_n%128].vec = vec_dt; cache_n++;
+    }
     return vec_dt;
 }
 
@@ -136,11 +143,32 @@ PtrDType dtype_ptr(const DType* dt, int size, AddrSpace addrspace) {
     return ptr_dt;
 }
 
+// Vectorization for pointer dtype (parity with Python's PtrDType.vec)
+PtrDType ptrdtype_vec(const PtrDType* dt, int sz) {
+    assert(dt != NULL);
+    assert(dt->v == 1);
+    if (sz == 1) return *dt;
+    // If this is an ImageDType, preserve image identity by copying and setting v
+    if (strcmp(dt->base.name, "imageh") == 0 || strcmp(dt->base.name, "imagef") == 0) {
+        const ImageDType* idt = (const ImageDType*)dt;
+        ImageDType out = *idt; // shallow copy preserves shape
+        out.ptr_base.v = sz;
+        return out.ptr_base;
+    }
+    PtrDType out = *dt;
+    out.v = sz;
+    return out;
+}
+
 // Scalar extraction
 DType dtype_scalar(const DType* dt) {
     // Python: def scalar(self) -> DType: return self._scalar if self._scalar is not None else self
     return dt->_scalar != NULL ? *dt->_scalar : *dt;
 }
+
+// Properties helpers
+const DType* dtype_base(const DType* dt){ return dt; }
+int dtype_vcount(const DType* dt){ return dt ? dt->count : 0; }
 
 // nbytes for non-ptr types (should throw error)
 int dtype_nbytes(const DType* dt) {
@@ -157,6 +185,9 @@ int ptrdtype_nbytes(const PtrDType* dt) {
     if (dt->size == -1) return 0;
     return dt->size * dt->base.itemsize;
 }
+
+const DType* ptrdtype_base(const PtrDType* dt){ return dt ? dt->base_dtype : NULL; }
+int ptrdtype_vcount(const PtrDType* dt){ return dt ? dt->v : 0; }
 
 // ImageDType creation - faithful port from Python
 ImageDType imagedtype_create(const int* shape, int shape_len, bool is_half) {
@@ -208,17 +239,12 @@ ImageDType dtypes_imagef(const int* shape, int shape_len) {
 }
 
 // Type checking functions
+static inline int _dtype_is_image(const DType* dt){ return dt && (strcmp(dt->name,"imageh")==0 || strcmp(dt->name,"imagef")==0); }
 bool dtypes_is_float(const DType* dt) {
     // Python: def is_float(x: DType) -> bool: return x.scalar() in dtypes.floats or isinstance(x, ImageDType)
-    // Check if it's an ImageDType by checking the name
-    if (strcmp(dt->name, "imageh") == 0 || strcmp(dt->name, "imagef") == 0) {
-        return true;
-    }
-    
+    if (_dtype_is_image(dt)) return true;
     DType scalar = dtype_scalar(dt);
-    for (int i = 0; i < 6; i++) {
-        if (dtype_eq(&scalar, dtypes.floats[i])) return true;
-    }
+    for (int i = 0; i < 6; i++) if (dtype_eq(&scalar, dtypes.floats[i])) return true;
     return false;
 }
 
@@ -511,9 +537,10 @@ void _free_recursive_parents(const DType** parents) {
 
 // Python: @functools.cache def least_upper_dtype(*ds:DType) -> DType:
 DType least_upper_dtype(const DType* a, const DType* b) {
-    // Python: return min(set.intersection(*[_get_recursive_parents(d) for d in ds])) if not (images:=[d for d in ds if isinstance(d, ImageDType)]) else images[0]
-    
-    // TODO: Check for ImageDType first (not implemented yet)
+    // Python: return min(intersection(...)) if not images else first image
+    // Image short-circuit: if either dtype is an ImageDType, return it
+    if (_dtype_is_image(a)) return *a;
+    if (_dtype_is_image(b)) return *b;
     
     // Get recursive parents for both types
     int count_a, count_b;
@@ -550,12 +577,28 @@ DType least_upper_dtype(const DType* a, const DType* b) {
 }
 
 DType least_upper_dtype_multi(const DType** types, int count) {
-    if (count == 0) return *dtypes.default_float;
-    DType result = *types[0];
-    for (int i = 1; i < count; i++) {
-        result = least_upper_dtype(&result, types[i]);
+    if (count <= 0) return *dtypes.default_float;
+    // image short-circuit: return first image
+    for (int i=0;i<count;i++) if (_dtype_is_image(types[i])) return *types[i];
+    // intersect parents across all types
+    int cnt0=0; const DType** acc = _get_recursive_parents(types[0], &cnt0);
+    static const DType* inters[64]; int inters_n = cnt0 < 64 ? cnt0 : 64;
+    for (int i=0;i<inters_n;i++) inters[i]=acc[i];
+    int n = inters_n;
+    for (int t=1;t<count; t++){
+        int cnt=0; const DType** p = _get_recursive_parents(types[t], &cnt);
+        const DType* next[64]; int nn=0;
+        for (int i=0;i<n;i++){
+            for (int j=0;j<cnt;j++) if (inters[i]==p[j]){ next[nn++]=inters[i]; break; }
+        }
+        for (int i=0;i<nn;i++) inters[i]=next[i];
+        n = nn;
+        if (n==0) break;
     }
-    return result;
+    if (n==0) return *types[0];
+    const DType* min_type = inters[0];
+    for (int i=1;i<n;i++) if (dtype_lt(inters[i], min_type)) min_type = inters[i];
+    return *min_type;
 }
 
 DType least_upper_float(const DType* dt) {
@@ -588,6 +631,9 @@ bool can_safe_cast(const DType* dt0, const DType* dt1) {
         return dtype_eq(dt0, &dtypes.uint16) || 
                dtype_eq(dt0, &dtypes.uint8);
     }
+    if (dtype_eq(dt1, &dtypes.uint16)) {
+        return dtype_eq(dt0, &dtypes.uint8);
+    }
     if (dtype_eq(dt1, &dtypes.int64)) {
         return dtype_eq(dt0, &dtypes.uint32) || dtype_eq(dt0, &dtypes.uint16) || 
                dtype_eq(dt0, &dtypes.uint8) || dtype_eq(dt0, &dtypes.int32) || 
@@ -600,6 +646,9 @@ bool can_safe_cast(const DType* dt0, const DType* dt1) {
     if (dtype_eq(dt1, &dtypes.int16)) {
         return dtype_eq(dt0, &dtypes.uint8) || dtype_eq(dt0, &dtypes.int8);
     }
+    // Generic rules for monotonic unsigned/signed widening
+    if (dtypes_is_unsigned(dt0) && dtypes_is_unsigned(dt1) && dt1->itemsize >= dt0->itemsize) return true;
+    if (!dtypes_is_unsigned(dt0) && !dtypes_is_unsigned(dt1) && dtypes_is_int(dt0) && dtypes_is_int(dt1) && dt1->itemsize >= dt0->itemsize) return true;
     
     return false;
 }
@@ -631,35 +680,81 @@ DType sum_acc_dtype(const DType* dt) {
 
 // FP16 truncation
 float truncate_fp16(double x) {
-    // Python: def truncate_fp16(x):
-    //   try: return struct.unpack("@e", struct.pack("@e", float(x)))[0]
-    //   except OverflowError: return math.copysign(math.inf, x)
-    
+    // Faithful double -> half conversion with ties-to-even
     if (isnan(x)) return (float)x;
     if (isinf(x)) return copysignf(INFINITY, (float)x);
-    
-    // Simple truncation to float16 precision (simplified)
-    float f = (float)x;
-    if (fabsf(f) > 65504.0f) { // fp16 max value
-        return copysignf(INFINITY, f);
+    union { double d; uint64_t u; } in; in.d = x;
+    uint64_t xb = in.u;
+    uint32_t sign = (uint32_t)((xb >> 63) & 1u);
+    int32_t exp = (int32_t)((xb >> 52) & 0x7FF) - 1023; // unbiased
+    uint64_t mant = xb & 0xFFFFFFFFFFFFFull; // 52 bits
+
+    uint16_t h;
+    if (((xb >> 52) & 0x7FF) == 0x7FF) { // NaN/Inf
+        h = (uint16_t)((sign<<15) | 0x7C00 | (mant ? 1 : 0));
+    } else if (exp > 15) {
+        h = (uint16_t)((sign<<15) | 0x7C00); // overflow -> inf
+    } else if (exp >= -14) {
+        // normal: construct 1.mant and round to 10 fraction bits
+        uint64_t mant_full = (1ull<<52) | mant; // 53 bits
+        int shift = 52 - 10; // 42
+        uint64_t mant11 = mant_full >> shift; // includes leading 1 + 10 frac
+        uint64_t rem = mant_full & ((1ull<<shift)-1);
+        uint64_t halfulp = 1ull << (shift-1);
+        if (rem > halfulp || (rem == halfulp && (mant11 & 1ull))) mant11++;
+        // handle overflow from rounding
+        if (mant11 == (1ull<<11)) { // 11 bits overflow -> increment exponent
+            mant11 = (1ull<<10);
+            exp += 1;
+            if (exp > 15) { h = (uint16_t)((sign<<15)|0x7C00); goto pack; }
+        }
+        uint32_t e = (uint32_t)(exp + 15);
+        uint32_t frac10 = (uint32_t)(mant11 & 0x3FFu);
+        h = (uint16_t)((sign<<15) | (e<<10) | frac10);
+    } else if (exp >= -24) {
+        // subnormal: exponent = -14, shift mant accordingly
+        int rshift = (52 - 10) + (-(exp + 14)); // 42 + (-exp-14)
+        uint64_t mant_full = (1ull<<52) | mant; // implicit one
+        uint64_t mantx = mant_full >> rshift;
+        uint64_t rem = mant_full & ((1ull<<rshift)-1);
+        uint64_t halfulp = 1ull << (rshift-1);
+        uint64_t frac10 = mantx & 0x3FFu;
+        if (rem > halfulp || (rem == halfulp && (frac10 & 1ull))) frac10++;
+        h = (uint16_t)((sign<<15) | (uint16_t)(frac10 & 0x3FFu));
+    } else {
+        h = (uint16_t)(sign<<15); // underflow to zero
     }
-    // More precise fp16 conversion would require bit manipulation
-    return f;
+pack:
+    // convert half back to float32
+    uint32_t out_sign = (uint32_t)(h & 0x8000) << 16;
+    uint32_t out_exp = (h >> 10) & 0x1F;
+    uint32_t out_mant = h & 0x3FF;
+    uint32_t out;
+    if (out_exp == 0) {
+        if (out_mant == 0) out = out_sign;
+        else {
+            int e = -14;
+            uint32_t m = out_mant;
+            while ((m & 0x400) == 0) { m <<= 1; e -= 1; }
+            m &= 0x3FF;
+            out = out_sign | (uint32_t)((e + 127) << 23) | (m << 13);
+        }
+    } else if (out_exp == 0x1F) {
+        out = out_sign | 0x7F800000u | (out_mant ? 0x1 : 0);
+    } else {
+        out = out_sign | ((out_exp - 15 + 127) << 23) | (out_mant << 13);
+    }
+    union { uint32_t u; float f; } outu; outu.u = out; return outu.f;
 }
 
 // BF16 truncation  
 float truncate_bf16(double x) {
-    // Python implementation using bit manipulation
-    union { float f; uint32_t i; } u;
+    // Python parity: mask lower 16 bits of float32, overflow to inf at 0x7f7f0000 boundary
+    union { float f; uint32_t u; } u;
     u.f = (float)x;
-    
-    float max_bf16 = 3.38953e+38f; // approximately
-    if (fabsf(u.f) > max_bf16) {
-        return copysignf(INFINITY, u.f);
-    }
-    
-    // Truncate to bf16 precision by masking lower 16 bits
-    u.i &= 0xFFFF0000;
+    union { uint32_t u; float f; } maxu; maxu.u = 0x7f7f0000u; float max_bf16 = maxu.f;
+    if (fabsf(u.f) > max_bf16) return copysignf(INFINITY, u.f);
+    u.u &= 0xFFFF0000u;
     return u.f;
 }
 
@@ -883,25 +978,41 @@ double dtypes_truncate(double val, const DType* dt) {
 
 // String to dtype conversion
 DType to_dtype(const char* name) {
-    // Simplified lookup - in real implementation would use hash table
-    if (strcmp(name, "bool") == 0) return dtypes.bool_;
-    if (strcmp(name, "int8") == 0) return dtypes.int8;
-    if (strcmp(name, "uint8") == 0) return dtypes.uint8;
-    if (strcmp(name, "int16") == 0) return dtypes.int16;
-    if (strcmp(name, "uint16") == 0) return dtypes.uint16;
-    if (strcmp(name, "int32") == 0) return dtypes.int32;
-    if (strcmp(name, "uint32") == 0) return dtypes.uint32;
-    if (strcmp(name, "int64") == 0) return dtypes.int64;
-    if (strcmp(name, "uint64") == 0) return dtypes.uint64;
-    if (strcmp(name, "float16") == 0) return dtypes.float16;
-    if (strcmp(name, "float32") == 0) return dtypes.float32;
-    if (strcmp(name, "float64") == 0) return dtypes.float64;
-    
-    // Try aliases
-    if (strcmp(name, "float") == 0) return dtypes.float32;
-    if (strcmp(name, "double") == 0) return dtypes.float64;
-    if (strcmp(name, "int") == 0) return dtypes.int32;
-    
+    if (!name) { fprintf(stderr, "Error: null dtype name\n"); abort(); }
+    // lowercased input like Python getattr(dtypes, name.lower())
+    char buf[64]; size_t n=strlen(name); if (n>63) n=63; for(size_t i=0;i<n;i++) buf[i]=(char)tolower((unsigned char)name[i]); buf[n]='\0';
+    // Canonical names
+    if (strcmp(buf, "void") == 0) return dtypes.void_;
+    if (strcmp(buf, "bool") == 0) return dtypes.bool_;
+    if (strcmp(buf, "int8") == 0) return dtypes.int8;
+    if (strcmp(buf, "uint8") == 0) return dtypes.uint8;
+    if (strcmp(buf, "int16") == 0) return dtypes.int16;
+    if (strcmp(buf, "uint16") == 0) return dtypes.uint16;
+    if (strcmp(buf, "int32") == 0) return dtypes.int32;
+    if (strcmp(buf, "uint32") == 0) return dtypes.uint32;
+    if (strcmp(buf, "int64") == 0) return dtypes.int64;
+    if (strcmp(buf, "uint64") == 0) return dtypes.uint64;
+    if (strcmp(buf, "fp8e4m3") == 0) return dtypes.fp8e4m3;
+    if (strcmp(buf, "fp8e5m2") == 0) return dtypes.fp8e5m2;
+    if (strcmp(buf, "float16") == 0) return dtypes.float16;
+    if (strcmp(buf, "bfloat16") == 0) return dtypes.bfloat16;
+    if (strcmp(buf, "float32") == 0) return dtypes.float32;
+    if (strcmp(buf, "float64") == 0) return dtypes.float64;
+    // Aliases (match Python)
+    if (strcmp(buf, "half") == 0) return dtypes.float16;
+    if (strcmp(buf, "float") == 0) return dtypes.float32;
+    if (strcmp(buf, "double") == 0) return dtypes.float64;
+    if (strcmp(buf, "uchar") == 0) return dtypes.uint8;
+    if (strcmp(buf, "ushort") == 0) return dtypes.uint16;
+    if (strcmp(buf, "uint") == 0) return dtypes.uint32;
+    if (strcmp(buf, "ulong") == 0) return dtypes.uint64;
+    if (strcmp(buf, "char") == 0) return dtypes.int8;
+    if (strcmp(buf, "short") == 0) return dtypes.int16;
+    if (strcmp(buf, "int") == 0) return dtypes.int32;
+    if (strcmp(buf, "long") == 0) return dtypes.int64;
+    // Images (exposed as functions in Python; accept for completeness)
+    if (strcmp(buf, "imageh") == 0) { ImageDType t = dtypes_imageh((int[]){1}, 1); return t.ptr_base.base; }
+    if (strcmp(buf, "imagef") == 0) { ImageDType t = dtypes_imagef((int[]){1}, 1); return t.ptr_base.base; }
     fprintf(stderr, "Error: unknown dtype name: %s\n", name);
     abort();
 }
@@ -948,6 +1059,11 @@ const char* dtype_canonical_name(const DType* dt) {
     // Fallback to actual name
     return dt->name;
 }
+
+// dtypes.fields() equivalent
+int dtypes_fields_count(void){ int c=0; for (int i=0;i<17;i++){ if (dtypes.all[i]) c++; } return c; }
+const DType* dtypes_field_dtype(int index){ int c=0; for (int i=0;i<17;i++){ if (dtypes.all[i]){ if (c==index) return dtypes.all[i]; c++; } } return NULL; }
+const char* dtypes_field_name(int index){ const DType* dt = dtypes_field_dtype(index); return dt ? dtype_canonical_name(dt) : NULL; }
 
 // Initialization function
 void dtypes_init(void) {
@@ -1058,7 +1174,8 @@ void dtypes_init(void) {
                 dtypes.default_float = &dtypes.bfloat16;
             }
         } else {
-            fprintf(stderr, "Warning: %s is not a float dtype, keeping default\n", env_default_float);
+            fprintf(stderr, "%s is not a float dtype\n", env_default_float);
+            abort();
         }
     }
     
