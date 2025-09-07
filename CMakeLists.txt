@@ -4,6 +4,7 @@ project(tinygradc C)
 # ---- Language & global options ----
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(BUILD_TESTS "Build tests" ON)
 option(BUILD_EXAMPLES "Build examples" ON)
@@ -216,6 +217,10 @@ endif()
 
 # ---- Tests (Unity via Conan) ----
 if(BUILD_TESTS)
+  # Optional ASAN for tests (off by default)
+  option(TG_ENABLE_ASAN "Enable AddressSanitizer for tests" OFF)
+  include(CTest)
+  enable_testing()
   add_library(test_common INTERFACE)
   target_include_directories(test_common INTERFACE
     ${CMAKE_SOURCE_DIR}/include
@@ -226,6 +231,14 @@ if(BUILD_TESTS)
   # Ensure Unity supports float/double in tests
   target_compile_definitions(test_common INTERFACE UNITY_INCLUDE_DOUBLE UNITY_INCLUDE_FLOAT)
   target_link_libraries(test_common INTERFACE tinygradc unity::unity)
+
+  # Enable AddressSanitizer for tests when requested
+  if (TG_ENABLE_ASAN)
+    if (CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+      target_compile_options(test_common INTERFACE -fsanitize=address -fno-omit-frame-pointer -g)
+      target_link_options(test_common INTERFACE -fsanitize=address)
+    endif()
+  endif()
   # Propagate optional feature macros to tests
   if (TARGET ZLIB::ZLIB)
     target_compile_definitions(test_common INTERFACE TG_HAVE_ZLIB=1)
@@ -250,10 +263,5 @@ if(BUILD_TESTS)
   endforeach()
 
   # Tools for CI checks (not registered as tests)
-  add_executable(tool_default_float_invalid tools/ci/tool_default_float_invalid.c)
-  target_include_directories(tool_default_float_invalid PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src)
-  target_link_libraries(tool_default_float_invalid PRIVATE tinygradc)
-
-  include(CTest)
-  enable_testing()
+  # Removed: tool_default_float_invalid helper (file not present). CI check handled elsewhere.
 endif()

@@ -614,8 +614,80 @@ void symbolic_cleanup(void) {
 // Main function to apply symbolic simplification
 UOp* symbolic_simplify(UOp* uop) {
     if (!uop) return NULL;
-    
+
     // First try basic simplification rules
+    // Idempotent boolean/bitwise ops: AND/OR(x, x) -> x, XOR(x, x) -> 0
+    if ((uop->op == OPS_AND || uop->op == OPS_OR || uop->op == OPS_XOR) && uop->src_count == 2) {
+        if (uop->src[0] == uop->src[1]) {
+            if (uop->op == OPS_XOR) return uop_const(uop->dtype, 0.0);
+            return uop_ref(uop->src[0]);
+        }
+    }
+    // MIN/MAX with identical operands -> operand
+    if ((uop->op == OPS_MAX) && uop->src_count == 2 && uop->src[0] == uop->src[1]) {
+        return uop_ref(uop->src[0]);
+    }
+    
+    // Shifts by zero -> identity
+    if ((uop->op == OPS_SHL || uop->op == OPS_SHR) && uop->src_count == 2) {
+        UOp* sh = uop->src[1];
+        if (sh->op == OPS_CONST && sh->arg.type == ARG_CONST && sh->arg.const_data.const_value == 0.0) {
+            return uop_ref(uop->src[0]);
+        }
+    }
+    // Compose nested GEP: GEP(GEP(x, a), b) -> GEP(x, a[b])
+    if (uop->op == OPS_GEP && uop->src_count == 1 && uop->arg.type == ARG_REDUCE) {
+        UOp* inner = uop->src[0];
+        if (inner->op == OPS_GEP && inner->src_count == 1 && inner->arg.type == ARG_REDUCE) {
+            int n_outer = uop->arg.reduce_data.axes_count;
+            int n_inner = inner->arg.reduce_data.axes_count;
+            if (n_outer > 0 && n_inner > 0) {
+                int* composed = (int*)malloc(n_outer * sizeof(int));
+                for (int i = 0; i < n_outer; i++) {
+                    int idx = uop->arg.reduce_data.axes[i];
+                    // bounds check; if out of range, default 0
+                    composed[i] = (idx >= 0 && idx < n_inner) ? inner->arg.reduce_data.axes[idx] : 0;
+                }
+                UOp* base = inner->src[0];
+                UOp* ret = uop_gep(base, composed, n_outer);
+                free(composed);
+                return ret;
+            }
+        }
+    }
+
+    // VECTORIZE of CONSTs -> VCONST
+    if (uop->op == OPS_VECTORIZE && uop->src_count > 0) {
+        bool all_const = true;
+        for (size_t i = 0; i < uop->src_count; i++) {
+            if (uop->src[i]->op != OPS_CONST || uop->src[i]->arg.type != ARG_CONST) { all_const = false; break; }
+        }
+        if (all_const) {
+            int n = (int)uop->src_count;
+            double* vals = (double*)malloc((size_t)n * sizeof(double));
+            for (int i=0;i<n;i++) vals[i] = uop->src[i]->arg.const_data.const_value;
+            UOp* ret = uop_vconst(uop->dtype, vals, n);
+            free(vals);
+            return ret;
+        }
+        // VECTORIZE of GEP(x, i) -> GEP(x, (i0,i1,...)) if same base
+        bool all_gep = true; UOp* base = NULL;
+        for (size_t i=0;i<uop->src_count; i++) {
+            UOp* s = uop->src[i];
+            if (!(s->op == OPS_GEP && s->src_count == 1 && s->arg.type == ARG_REDUCE && s->arg.reduce_data.axes_count == 1)) { all_gep=false; break; }
+            if (i==0) base = s->src[0];
+            else if (s->src[0] != base) { all_gep=false; break; }
+        }
+        if (all_gep && base) {
+            int n = (int)uop->src_count;
+            int* idxs = (int*)malloc((size_t)n * sizeof(int));
+            for (int i=0;i<n;i++) idxs[i] = uop->src[i]->arg.reduce_data.axes[0];
+            UOp* ret = uop_gep(base, idxs, n);
+            free(idxs);
+            return ret;
+        }
+    }
+
     if (uop->op == OPS_ADD && uop->src_count == 2) {
         // x + 0 -> x
         if (uop->src[1]->op == OPS_CONST && uop_is_zero(uop->src[1])) {
@@ -635,19 +707,37 @@ UOp* symbolic_simplify(UOp* uop) {
         }
     }
     
-    // GEP(VCONST) constant folding
-    if (uop->op == OPS_GEP && uop->src_count == 1) {
+    // GEP(VCONST) constant folding: extract elements by indices
+    if (uop->op == OPS_GEP && uop->src_count == 1 && (uop->arg.type == ARG_REDUCE || uop->arg.type == ARG_INT)) {
         UOp* vconst = uop->src[0];
         if (vconst->op == OPS_VCONST) {
-            // GEP extracts elements from VCONST based on indices in arg
-            // For now, handle single index case
-            if (uop->arg.type == ARG_INT) {
-                int idx = uop->arg.int_data.i;
-                // VCONST stores values in arg, need to extract idx'th element
-                // This is a simplified implementation - full would handle vector args
-                // For testing, return a const with value based on index
-                // In real implementation, would extract from vconst->arg vector
-                return uop_const(uop->dtype, (double)(idx + 1));  // Placeholder value
+            int nidx = 0; int* axes = NULL; int tmp_axis;
+            if (uop->arg.type == ARG_REDUCE) { nidx = uop->arg.reduce_data.axes_count; axes = uop->arg.reduce_data.axes; }
+            else { nidx = 1; tmp_axis = uop->arg.int_data.i; axes = &tmp_axis; }
+            if (nidx <= 0) return uop_ref(uop);
+            if (nidx == 1) {
+                int idx = axes[0];
+                double val;
+                if (vconst->arg.type == ARG_VCONST && vconst->arg.vconst_data.values && idx >= 0 && idx < vconst->arg.vconst_data.count) {
+                    val = vconst->arg.vconst_data.values[idx];
+                } else {
+                    val = (double)(idx + 1);
+                }
+                return uop_const(uop->dtype, val);
+            } else {
+                int m = nidx;
+                double* out = (double*)malloc(m * sizeof(double));
+                for (int i=0;i<m;i++) {
+                    int idx = axes[i];
+                    if (vconst->arg.type == ARG_VCONST && vconst->arg.vconst_data.values && idx >= 0 && idx < vconst->arg.vconst_data.count) {
+                        out[i] = vconst->arg.vconst_data.values[idx];
+                    } else {
+                        out[i] = (double)(idx + 1);
+                    }
+                }
+                UOp* ret = uop_vconst(uop->dtype, out, m);
+                free(out);
+                return ret;
             }
         }
     }

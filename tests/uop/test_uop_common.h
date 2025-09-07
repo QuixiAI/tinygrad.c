@@ -12,6 +12,7 @@
 #include "uop/symbolic.h"
 #include "uop/transcendental.h"
 #include "dtype/dtype.h"
+#include "shape/shapetracker.h"
 
 /* Additional macros for UOp tests */
 #define ASSERT_FLOAT_EQ(actual, expected, tolerance) TEST_ASSERT_FLOAT_WITHIN(tolerance, expected, actual)

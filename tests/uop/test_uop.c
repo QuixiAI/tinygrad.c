@@ -107,6 +107,47 @@ TEST(test_uop_cache) {
     uop_unref(uop3);
 }
 
+TEST(test_uop_cache_tag_key) {
+    // Same op/dtype/arg but different tag must not alias
+    UOpArg arg = {.type = ARG_CONST};
+    arg.const_data.const_value = 7.0;
+    int t1 = 0, t2 = 0;
+    UOp* a = uop_new(OPS_CONST, dtypes.int32, NULL, 0, &arg, &t1);
+    UOp* b = uop_new(OPS_CONST, dtypes.int32, NULL, 0, &arg, &t2);
+    ASSERT(a != b);
+    // Same tag should alias
+    UOp* c = uop_new(OPS_CONST, dtypes.int32, NULL, 0, &arg, &t1);
+    ASSERT(a == c);
+    uop_unref(a); uop_unref(b); uop_unref(c);
+}
+
+TEST(test_uop_cache_vconst_key) {
+    // VCONST equality depends on values content
+    double v1[3] = {1.0, 2.0, 3.0};
+    double v2[3] = {1.0, 2.0, 3.0};
+    double v3[3] = {1.0, 2.0, 4.0};
+    UOp* x = uop_vconst(dtype_vec(&dtypes.float32, 3), v1, 3);
+    UOp* y = uop_vconst(dtype_vec(&dtypes.float32, 3), v2, 3);
+    UOp* z = uop_vconst(dtype_vec(&dtypes.float32, 3), v3, 3);
+    ASSERT(x == y);
+    ASSERT(x != z);
+    uop_unref(x); uop_unref(y); uop_unref(z);
+}
+
+TEST(test_uop_cache_gep_axes_key) {
+    // GEP arg packs axes. Same axes => alias; different axes => distinct
+    UOp* base = uop_broadcast(uop_const(dtypes.float32, 0.0), 4);
+    int idxs1[2] = {2, 1};
+    int idxs2[2] = {2, 1};
+    int idxs3[2] = {2, 0};
+    UOp* g1 = uop_gep(base, idxs1, 2);
+    UOp* g2 = uop_gep(base, idxs2, 2);
+    UOp* g3 = uop_gep(base, idxs3, 2);
+    ASSERT(g1 == g2);
+    ASSERT(g1 != g3);
+    uop_unref(base); uop_unref(g1); uop_unref(g2); uop_unref(g3);
+}
+
 
 // Test building a simple computation graph
 TEST(test_simple_computation_graph) {
@@ -345,6 +386,19 @@ TEST(test_local_and_register_definitions) {
     // Clean up
     uop_unref(local_buf);
     uop_unref(reg);
+}
+
+TEST(test_assign_and_barrier_helpers) {
+    UOp* buf = uop_define_local(dtypes.float32, 128);
+    UOp* val = uop_const(dtypes.float32, 1.0);
+    UOp* asg = uop_assign(buf, val);
+    TEST_ASSERT(asg->op == OPS_ASSIGN);
+    TEST_ASSERT(asg->dtype.count == dtypes.void_.count);
+    TEST_ASSERT(asg->src_count == 2);
+    UOp* bar = uop_barrier(asg);
+    TEST_ASSERT(bar->op == OPS_BARRIER);
+    TEST_ASSERT(bar->src_count == 1);
+    uop_unref(buf); uop_unref(val); uop_unref(asg); uop_unref(bar);
 }
 
 TEST(test_vector_operations) {
@@ -700,6 +754,38 @@ TEST(test_uop_tags) {
     // Tag should be preserved through operations
     UOp* y = uop_add(x, x);
     ASSERT(y != NULL);
+}
+
+TEST(test_uop_children_and_metadata) {
+    UOp* a = uop_const(dtypes.float32, 1.0);
+    UOp* b = uop_const(dtypes.float32, 2.0);
+    UOp* add = uop_add(a, b);
+    size_t n=0; UOp** kids = uop_children(a, &n);
+    TEST_ASSERT(n >= 1);
+    bool found=false; for (size_t i=0;i<n;i++) if (kids[i]==add) { found=true; break; }
+    TEST_ASSERT(found);
+    free(kids);
+    uop_meta_set(add, "role", (void*)"sum");
+    void* v = uop_meta_get(add, "role");
+    TEST_ASSERT(v != NULL);
+    TEST_ASSERT_EQUAL_STRING("sum", (const char*)v);
+    uop_unref(add); uop_unref(a); uop_unref(b);
+}
+
+// Pretty-print smoke test
+static const char* rep_cb(UOp* u, void* ctx){ (void)ctx; return ops_to_string(u->op); }
+TEST(test_pretty_print_smoke) {
+    UOp* a = uop_const(dtypes.int32, 3);
+    UOp* b = uop_const(dtypes.int32, 4);
+    UOp* add = uop_add(a, b);
+    // Basic pretty string
+    char* s = uop_pretty_str(add, false);
+    TEST_ASSERT(s != NULL);
+    free(s);
+    // Call print with a callback and color on to ensure no crash
+    UOp* list[] = {a, b, add};
+    print_uops_ex(list, 3, rep_cb, NULL, true);
+    uop_unref(add); uop_unref(a); uop_unref(b);
 }
 
 // Additional specific tests from Python suite

@@ -1,26 +1,46 @@
 SHELL := /bin/bash
 DOCKER_IMAGE ?= conanio/gcc11-ubuntu16.04:2.20.1
 
+# Quiet by default. Set QUIET=0 for verbose logs.
+QUIET ?= 1
+ifeq ($(QUIET),1)
+  MAKEFLAGS += -s
+  CMAKE_BUILD_SILENT := -- -s
+  CONAN_LOG_LEVEL := -v error
+  REDIR := >
+else
+  CMAKE_BUILD_SILENT :=
+  CONAN_LOG_LEVEL :=
+  REDIR :=
+endif
+
+# Persist Conan cache across builds (default to host cache)
+# This avoids re-downloading on every build by mounting a stable cache into the container
+CONAN_CACHE_DIR ?= $(PWD)/build/.conan2
+
 .PHONY: all build rebuild test clean realclean
 
 all: build
 
 # Build (keeps build/ by default). Use CLEAN=1 to force a fresh build dir.
 build:
-	set -euo pipefail; \
+	@set -euo pipefail; \
 	if [ "${CLEAN:-0}" = "1" ]; then rm -rf build; fi; \
-	DOCKER_EXTRA=""; \
-	if [ "${PERSIST_CONAN:-0}" = "1" ]; then mkdir -p "$$HOME/.conan2"; DOCKER_EXTRA="-v $$HOME/.conan2:/cache/.conan2 -e CONAN_HOME=/cache/.conan2"; fi; \
-	docker run --rm \
+	mkdir -p build/logs; \
+	mkdir -p "$(CONAN_CACHE_DIR)"; \
+	echo "[conan] installing dependencies..."; \
+	( docker run --rm \
 	  -v "$$PWD":/work -w /work \
-	  $$DOCKER_EXTRA \
+	  -v "$(CONAN_CACHE_DIR)":/cache/.conan2 -e CONAN_HOME=/cache/.conan2 \
 	  -e CLEAN_CONAN \
 	  --user "`id -u`":"`id -g`" \
 	  "$(DOCKER_IMAGE)" \
 	  bash -lc ' \
-	    if [ "${CLEAN_CONAN:-0}" = "1" ]; then rm -rf "${CONAN_HOME:-~/.conan2}"; fi; \
+	    if [ "${CLEAN_CONAN:-0}" = "1" ]; then rm -rf "${CONAN_HOME}"/*; fi; \
+	    mkdir -p "${CONAN_HOME}/profiles"; \
+	    if [ ! -f "${CONAN_HOME}/profiles/default" ]; then conan profile detect --force $(CONAN_LOG_LEVEL); fi; \
 	    mkdir -p build/conan/locks; \
-	    conan lock create . --profile=profiles/linux-gcc11 --lockfile-out=build/conan/locks/linux-gcc11.lock; \
+	    conan lock create . --profile=profiles/linux-gcc11 --lockfile-out=build/conan/locks/linux-gcc11.lock $(CONAN_LOG_LEVEL); \
 	    conan install . \
 	      -of build/conan \
 	      --lockfile=build/conan/locks/linux-gcc11.lock \
@@ -30,14 +50,19 @@ build:
 	      -g CMakeDeps -g CMakeToolchain \
 	      --deployer=full_deploy \
 	      --deployer-folder build/conan/full_deploy \
-	  '; \
+	      $(CONAN_LOG_LEVEL) \
+	  ' ) > build/logs/conan_install.log 2>&1 || { echo "Conan failed. See build/logs/conan_install.log"; exit 1; }; \
+	echo "[cmake] configuring..."; \
 	cmake -S . -B build \
 	  -DBUILD_TESTS=ON \
 	  -DBUILD_EXAMPLES=ON \
 	  -DCMAKE_BUILD_TYPE=Release \
 	  -DCMAKE_TOOLCHAIN_FILE=build/conan/conan_toolchain.cmake \
-	  -DCMAKE_C_FLAGS="-DUNITY_INCLUDE_DOUBLE -DUNITY_INCLUDE_FLOAT"; \
-	cmake --build build -j
+	  -DCMAKE_C_FLAGS="-DUNITY_INCLUDE_DOUBLE -DUNITY_INCLUDE_FLOAT" \
+	  $$( [ "${ASAN:-0}" = "1" ] && echo -DTG_ENABLE_ASAN=ON || true ) \
+	  > build/logs/cmake_configure.log 2>&1 || { echo "CMake configure failed. See build/logs/cmake_configure.log"; exit 1; }; \
+	echo "[cmake] building..."; \
+	cmake --build build -j $(CMAKE_BUILD_SILENT)
 
 rebuild: 
 	$(MAKE) CLEAN=1 build

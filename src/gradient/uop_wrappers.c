@@ -44,7 +44,8 @@ tg_uop_t* tg_uop_add(tg_uop_t* a, tg_uop_t* b){ return uop_add(a,b); }
 tg_uop_t* tg_uop_mul(tg_uop_t* a, tg_uop_t* b){ return uop_mul(a,b); }
 tg_uop_t* tg_uop_div(tg_uop_t* a, tg_uop_t* b){ return uop_div(a,b); }
 tg_uop_t* tg_uop_sub(tg_uop_t* a, tg_uop_t* b){ return uop_sub(a,b); }
-tg_uop_t* tg_uop_pow(tg_uop_t* a, tg_uop_t* b){ UOp* src[]={a,b}; UOpArg arg={0}; return uop_new(OPS_POW, a->dtype, src, 2, &arg, NULL); }
+// POW follows UOp.alu rule: out dtype = last operand's dtype (b)
+tg_uop_t* tg_uop_pow(tg_uop_t* a, tg_uop_t* b){ UOp* src[]={a,b}; UOpArg arg={0}; DType dt=b->dtype; return uop_new(OPS_POW, dt, src, 2, &arg, NULL); }
 
 // Comparisons and where
 tg_uop_t* tg_uop_cmplt(tg_uop_t* a, tg_uop_t* b){ return uop_lt(a,b); }

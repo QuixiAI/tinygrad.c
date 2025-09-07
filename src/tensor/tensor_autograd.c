@@ -158,10 +158,24 @@ static tg_tensor_t** build_grad_tensors(tg_uop_t* out, tg_tensor_t** inputs, int
   tg_tensor_t** ret = (tg_tensor_t**)calloc(input_count, sizeof(tg_tensor_t*));
   for(int i=0;i<input_count;i++){
     tg_uop_t* gu = tg_gradient_result_get(gr, vars[i]); if(!gu){ ret[i]=NULL; continue; }
+    if (getenv("DEBUG_GRAD")) {
+      int nd_dbg=0; const int32_t* shp_dbg = uop_shape(gu, &nd_dbg);
+      char* ps = uop_pretty_str(gu, false);
+      fprintf(stderr, "grad uop: %s shape_nd=%d", ps?ps:"<null>", nd_dbg);
+      if (shp_dbg && nd_dbg>0) { fprintf(stderr, " shape=["); for(int k=0;k<nd_dbg;k++){ fprintf(stderr, "%d%s", shp_dbg[k], k==nd_dbg-1?"]":" "); } }
+      fprintf(stderr, "\n"); if (ps) free(ps);
+      fflush(stderr);
+    }
     np_array_t* arr = eval_with_bindings(gu, eval_bindings, eval_count);
     tg_tensor_t in_i = unbox(inputs[i]);
     tg_tensor_t outt = tensor_create_from_shape(in_i->shape, in_i->rank, &dtypes.float32);
-    outt->uop = gu; memcpy(outt->data, arr->data, outt->numel*sizeof(float)); np_free(arr);
+    outt->uop = gu;
+    if (getenv("DEBUG_GRAD")) {
+      fprintf(stderr, "build_grad_tensors: arr_size=%zu out_numel=%zu nd=%zu\n", arr ? arr->size : 0, outt->numel, arr ? arr->ndim : 0);
+      fflush(stderr);
+    }
+    memcpy(outt->data, arr->data, outt->numel*sizeof(float));
+    np_free(arr);
     ret[i]=box(outt);
   }
   tg_gradient_result_free(gr);

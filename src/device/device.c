@@ -143,14 +143,16 @@ const char* tg_device_canonicalize(const char* device_str) {
 // Port of Python: @property def DEFAULT(self) -> str:
 static int _is_true_env(const char* name){ const char* v=getenv(name); if(!v) return 0; return strcmp(v,"1")==0 || strcasecmp(v,"true")==0 || strlen(v)>0; }
 const char* tg_device_get_default(void) {
-    if (default_device) { free(default_device); default_device = NULL; }
-    // Mirror Python DEFAULT selection
+    // Mirror Python DEFAULT selection, avoid freeing existing default unless it changes
     const char* dev = getenv("DEV");
     if (dev && *dev){
         // Use DEV override
         char buf[64]; strncpy(buf, dev, sizeof(buf)-1); buf[sizeof(buf)-1]='\0';
         const char* canon = tg_device_canonicalize(buf);
-        default_device = strdup(canon);
+        if (!default_device || strcmp(default_device, canon) != 0) {
+            if (default_device) free(default_device);
+            default_device = strdup(canon);
+        }
         return default_device;
     }
     // From environment flags matching backend names (exclude DISK, NPY like Python)
@@ -160,23 +162,33 @@ const char* tg_device_get_default(void) {
         if (strcmp(nm, "DISK")==0 || strcmp(nm, "NPY")==0) continue;
         if (_is_true_env(nm)) { if (chosen==-1) chosen = i; }
     }
-    if (chosen!=-1) { default_device = strdup(k_backends[chosen].name); return default_device; }
+    if (chosen!=-1) {
+        if (!default_device || strcmp(default_device, k_backends[chosen].name) != 0) {
+            if (default_device) free(default_device);
+            default_device = strdup(k_backends[chosen].name);
+        }
+        return default_device;
+    }
     // Fallback: pick the first available backend, set env for children
     if (k_backends_count > 0){
-        default_device = strdup(k_backends[0].name);
+        if (!default_device || strcmp(default_device, k_backends[0].name) != 0) {
+            if (default_device) free(default_device);
+            default_device = strdup(k_backends[0].name);
+        }
         // propagate to env (best-effort)
         setenv(default_device, "1", 1);
         return default_device;
     }
     // Absolute fallback if no backends: CPU
-    default_device = strdup("CPU");
+    if (!default_device || strcmp(default_device, "CPU") != 0) {
+        if (default_device) free(default_device);
+        default_device = strdup("CPU");
+    }
     return default_device;
 }
 
 int tg_device_set_default(const char* device_str) {
-    if (default_device) {
-        free(default_device);
-    }
+    // Do not free previous default to avoid invalidating external pointers returned by tg_device_get_default
     default_device = strdup(device_str);
     return TG_SUCCESS;
 }

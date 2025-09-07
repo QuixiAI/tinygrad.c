@@ -241,6 +241,155 @@ TEST(test_comparison_operations) {
     uop_unref(ge);
 }
 
+TEST(test_where_dtype_promotion) {
+    // Use non-constant condition to avoid folding to a single branch
+    UOp* a = uop_var("a", dtypes.int32);
+    UOp* b = uop_var("b", dtypes.int32);
+    UOp* cond = uop_lt(a, b);
+    UOp* t = uop_const(dtypes.float16, 1.0);
+    UOp* f = uop_const(dtypes.float32, 2.0);
+    UOp* r = uop_where(cond, t, f);
+    DType exp = least_upper_dtype(&t->dtype, &f->dtype);
+    TEST_ASSERT(dtype_eq(&r->dtype, &exp));
+    uop_unref(a); uop_unref(b); uop_unref(cond); uop_unref(t); uop_unref(f); uop_unref(r);
+}
+
+TEST(test_pow_dtype_promotion) {
+    // Avoid constant folding: use a variable exponent
+    UOp* a = uop_const(dtypes.float16, 2.0);
+    UOp* b = uop_var("e", dtypes.float32);
+    UOp* p = math_ops.pow(a, b);
+    DType expp = least_upper_dtype(&a->dtype, &b->dtype);
+    TEST_ASSERT(dtype_eq(&p->dtype, &expp));
+    uop_unref(a); uop_unref(b); uop_unref(p);
+}
+
+TEST(test_bitwise_identities) {
+    UOp* x = uop_const(dtypes.int32, 42);
+    UOp* and_idem = uop_and(x, x);
+    UOp* or_idem = uop_or(x, x);
+    UOp* xor_zero = uop_xor(x, x);
+    UOp* s1 = uop_simplify(and_idem);
+    UOp* s2 = uop_simplify(or_idem);
+    UOp* s3 = uop_simplify(xor_zero);
+    TEST_ASSERT(s1 == x);
+    TEST_ASSERT(s2 == x);
+    TEST_ASSERT(s3->op == OPS_CONST && s3->arg.type == ARG_CONST && s3->arg.const_data.const_value == 0.0);
+    uop_unref(x); uop_unref(and_idem); uop_unref(or_idem); uop_unref(xor_zero); uop_unref(s1); uop_unref(s2); uop_unref(s3);
+}
+
+TEST(test_shift_by_zero_identity) {
+    UOp* x = uop_const(dtypes.int32, 7);
+    UOp* zero = uop_const(dtypes.int32, 0);
+    UOp* shl0 = uop_shl(x, zero);
+    UOp* shr0 = uop_shr(x, zero);
+    UOp* s1 = uop_simplify(shl0);
+    UOp* s2 = uop_simplify(shr0);
+    TEST_ASSERT(s1 == x);
+    TEST_ASSERT(s2 == x);
+    uop_unref(x); uop_unref(zero); uop_unref(shl0); uop_unref(shr0); uop_unref(s1); uop_unref(s2);
+}
+
+TEST(test_commutative_reorder_and_dedup) {
+    UOp* a = uop_const(dtypes.int32, 2);
+    UOp* b = uop_const(dtypes.int32, 3);
+    UOp* ab = uop_add(a, b);
+    UOp* ba = uop_add(b, a);
+    UOp* s1 = uop_simplify(ab);
+    UOp* s2 = uop_simplify(ba);
+    TEST_ASSERT(s1 == s2);
+    uop_unref(a); uop_unref(b); uop_unref(ab); uop_unref(ba); uop_unref(s1); uop_unref(s2);
+}
+
+// Test GEP and REDUCE_AXIS arg parity
+  TEST(test_gep_and_axis_arg) {
+    // VECTORIZE special case: GEP(VECTORIZE(x), i) == element i
+    UOp* x = uop_const(dtypes.float32, 3.14);
+    // Build VECTORIZE by repeating x 4 times
+    UOp* vec_src[4] = {x,x,x,x};
+    UOpArg arg = {0};
+    UOp* vec = uop_new(OPS_VECTORIZE, dtype_vec(&dtypes.float32, 4), vec_src, 4, &arg, NULL);
+    int idxs[] = {2};
+    UOp* ge = uop_gep(vec, idxs, 1);
+    ASSERT(ge == x || ge->op == OPS_CONST);  // either exact element or equivalent const
+    uop_unref(ge);
+    uop_unref(vec);
+
+    // REDUCE_AXIS axis_arg
+    int axes[] = {1,3};
+    UOp* red = uop_reduce_axis(x, OPS_ADD, axes, 2);
+    int* out_axes = NULL; int n=0;
+    int ok = uop_axis_arg(red, &out_axes, &n);
+    ASSERT(ok == 1);
+    ASSERT(n == 2);
+    ASSERT(out_axes[0] == 1 && out_axes[1] == 3);
+    free(out_axes);
+    uop_unref(red);
+    uop_unref(x);
+  }
+
+  TEST(test_reduce_axis_neg_axes_normalization) {
+    // Verify negative axes normalize, dedup, and sort
+    int32_t shape[3] = {4, 5, 6};
+    ShapeTracker* st = shapetracker_from_shape(shape, 3);
+    UOp* buf = uop_buffer(NULL, 0, dtypes.float32);
+    UOp* view = uop_view(buf, st);
+    int axes[] = {-1, -3, 2, 2}; // -> [2, 0, 2, 2] -> dedup/sort -> [0,2]
+    UOp* red = uop_reduce_axis(view, OPS_ADD, axes, 4);
+    int* out_axes=NULL; int n=0; int ok = uop_axis_arg(red, &out_axes, &n);
+    ASSERT(ok == 1);
+    ASSERT(n == 2);
+    ASSERT(out_axes[0] == 0 && out_axes[1] == 2);
+    free(out_axes);
+    uop_unref(red); uop_unref(view); uop_unref(buf);
+  }
+
+// Test cast_vec and broadcast wrappers
+TEST(test_cast_vec_and_broadcast) {
+    UOp* a = uop_const(dtypes.float32, 7.0);
+    UOp* v = uop_broadcast(a, 4);
+    ASSERT(v->op == OPS_VECTORIZE);
+    ASSERT(v->dtype.count == 4);
+    UOp* castv = uop_cast_vec(a, dtypes.int32, 8);
+    ASSERT(castv->op == OPS_CAST);
+    ASSERT(castv->dtype.count == 8);
+    ASSERT(strcmp(castv->dtype._scalar->name, dtypes.int32.name) == 0);
+    uop_unref(castv); uop_unref(v); uop_unref(a);
+}
+
+// Test VCONST and GEP folding
+TEST(test_vconst_gep_folding) {
+    double vals[4] = {10.0, 20.0, 30.0, 40.0};
+    UOp* v = uop_vconst(dtypes.float32, vals, 4);
+    int idxs1[] = {2};
+    UOp* g1 = uop_gep(v, idxs1, 1);
+    UOp* s1 = uop_simplify(g1);
+    ASSERT(s1->op == OPS_CONST);
+    ASSERT_FLOAT_EQ(s1->arg.const_data.const_value, 30.0, 1e-6);
+    uop_unref(s1); uop_unref(g1);
+    int idxs2[] = {0,3};
+    UOp* g2 = uop_gep(v, idxs2, 2);
+    UOp* s2 = uop_simplify(g2);
+    ASSERT(s2->op == OPS_VCONST);
+    ASSERT(s2->arg.type == ARG_VCONST && s2->arg.vconst_data.count == 2);
+    ASSERT_FLOAT_EQ(s2->arg.vconst_data.values[0], 10.0, 1e-6);
+    ASSERT_FLOAT_EQ(s2->arg.vconst_data.values[1], 40.0, 1e-6);
+    uop_unref(s2); uop_unref(g2); uop_unref(v);
+}
+
+// Test toposort gate parity (gate == NULL equals default toposort)
+static bool gate_all(UOp* u){ (void)u; return true; }
+TEST(test_toposort_gate) {
+    UOp* a = uop_const(dtypes.int32, 1);
+    UOp* b = uop_const(dtypes.int32, 2);
+    UOp* add = uop_add(a, b);
+    size_t n1=0, n2=0; UOp **t1 = uop_toposort(add, &n1), **t2 = uop_toposort_gate(add, &n2, gate_all);
+    ASSERT(n1 == n2);
+    for (size_t i=0;i<n1;i++) ASSERT(t1[i] == t2[i]);
+    free(t1); free(t2);
+    uop_unref(add); uop_unref(a); uop_unref(b);
+}
+
 // Test MIN/MAX operations
 TEST(test_min_max_operations) {
     

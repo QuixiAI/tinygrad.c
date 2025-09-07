@@ -54,6 +54,12 @@ static np_array_t* binary_op(np_array_t* left, np_array_t* right, const char* op
         size_t dr = (i < nd - ndr) ? 1 : right->shape[i - (nd - ndr)];
         if (dl != dr && dl != 1 && dr != 1) {
             // Incompatible shapes: fallback 1D with max size
+            if (getenv("DEBUG_INTERPRETER")) {
+                fprintf(stderr, "binary_op fallback: ndl=%zu ndr=%zu i=%zu dl=%zu dr=%zu left_size=%zu right_size=%zu\n",
+                        ndl, ndr, i, dl, dr, left->size, right->size);
+                fprintf(stderr, "  left shape=["); for(size_t k=0;k<ndl;k++) fprintf(stderr, "%zu%s", left->shape[k], k+1==ndl?"]\n":" ");
+                fprintf(stderr, "  right shape=["); for(size_t k=0;k<ndr;k++) fprintf(stderr, "%zu%s", right->shape[k], k+1==ndr?"]\n":" ");
+            }
             size_t out_size = left->size > right->size ? left->size : right->size;
             np_array_t* fallback = np_zeros(1, &out_size, &dtypes.float32);
             free(out_shape);

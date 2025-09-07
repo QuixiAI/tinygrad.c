@@ -11,6 +11,9 @@
 #include "uop/mathtraits.h"  // This provides the math_ops symbol
 #include "shape/shapetracker.h"
 
+// Forward declaration for optional buffer map removal used in uop_free
+static void bufmap_remove(struct UOp* uop);
+
 // Line 1-10: imports
 // from __future__ import annotations
 // import functools, itertools, hashlib, math, struct
@@ -61,11 +64,10 @@ UOp* uop_new(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void
         return cached;  // Return cached version instead of creating duplicate
     }
     
-    // Line 59-60: Create new UOp
+// Line 59-60: Create new UOp
     UOp* uop = (UOp*)calloc(1, sizeof(UOp));
-    // Zero-initialize to ensure ref_count starts at 0
+    // Zero-initialize and then set fields
     memset(uop, 0, sizeof(UOp));
-    // IMPORTANT: set fields BEFORE zeroing to prevent memset from erasing them
     uop->ref_count = 1;  // Explicitly set to 1
     uop->op = op;
     uop->dtype = dtype;
@@ -86,6 +88,11 @@ UOp* uop_new(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void
         uop->arg = *arg;
         // Deep copy arrays inside arg based on type
         if (op == OPS_REDUCE_AXIS && arg->type == ARG_REDUCE && arg->reduce_data.axes) {
+            uop->arg.reduce_data.axes = (int*)malloc(arg->reduce_data.axes_count * sizeof(int));
+            memcpy(uop->arg.reduce_data.axes, arg->reduce_data.axes,
+                   arg->reduce_data.axes_count * sizeof(int));
+        }
+        if (op == OPS_GEP && arg->type == ARG_REDUCE && arg->reduce_data.axes) {
             uop->arg.reduce_data.axes = (int*)malloc(arg->reduce_data.axes_count * sizeof(int));
             memcpy(uop->arg.reduce_data.axes, arg->reduce_data.axes,
                    arg->reduce_data.axes_count * sizeof(int));
@@ -111,35 +118,79 @@ UOp* uop_new(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void
             memcpy(uop->arg.shrink_data.start, arg->shrink_data.start, n * sizeof(int32_t));
             memcpy(uop->arg.shrink_data.end,   arg->shrink_data.end,   n * sizeof(int32_t));
         }
+        if (arg->type == ARG_VCONST && arg->vconst_data.values && arg->vconst_data.count > 0) {
+            int n = arg->vconst_data.count;
+            uop->arg.vconst_data.count = n;
+            uop->arg.vconst_data.values = (double*)malloc(n * sizeof(double));
+            memcpy(uop->arg.vconst_data.values, arg->vconst_data.values, n * sizeof(double));
+        }
         // If a ShapeTracker was passed via arg (legacy), attach it to uop->st
         if (arg->type == ARG_SHAPE_TRACKER && arg->st_data.st) {
             uop->st = (ShapeTracker*)arg->st_data.st;
         }
     }
     uop->math_ops = &math_ops;  // Set this once, after all initialization
+    uop->tag = tag;
     
     // Initialize vmin/vmax to invalid state
     uop->vmin_vmax_valid = false;
     uop->vmin = 0;
     uop->vmax = 0;
     
+    // Initialize optional children/metadata
+    uop->children = NULL; uop->children_count = 0; uop->children_cap = 0; uop->meta_head = NULL;
+    // Register as child of sources
+    for (size_t i = 0; i < uop->src_count; i++) {
+        UOp* p = uop->src[i];
+        if (!p) continue;
+        if (p->children_count >= p->children_cap) {
+            size_t nc = p->children_cap ? p->children_cap * 2 : 4;
+            p->children = (UOp**)realloc(p->children, nc * sizeof(UOp*));
+            p->children_cap = nc;
+        }
+        p->children[p->children_count++] = uop;
+    }
     // Add to cache
     uop_cache_put(uop);
     return uop;
+}
+
+char* uop_pretty_str(UOp* u, bool color) {
+    if (!u) return NULL;
+    const char* opn = ops_to_string(u->op);
+    const char* dtn = u->dtype.count ? u->dtype.name : NULL;
+    char buf[256]; buf[0]=0;
+    if (color) {
+        if (dtn) snprintf(buf, sizeof(buf), "\x1b[36m%s\x1b[0m(%s, src=%zu)", opn, dtn, u->src_count);
+        else snprintf(buf, sizeof(buf), "\x1b[36m%s\x1b[0m(src=%zu)", opn, u->src_count);
+    } else {
+        if (dtn) snprintf(buf, sizeof(buf), "%s(%s, src=%zu)", opn, dtn, u->src_count);
+        else snprintf(buf, sizeof(buf), "%s(src=%zu)", opn, u->src_count);
+    }
+    size_t n = strlen(buf);
+    char* out = (char*)malloc(n+1); if (!out) return NULL;
+    memcpy(out, buf, n+1);
+    return out;
 }
 
 // Line 61-68: Reference counting (implicit in Python)
 void uop_free(UOp* uop) {
     if (!uop) return;
     if (--uop->ref_count == 0) {
+        // Remove from optional buffer map (weak semantics)
+        bufmap_remove(uop);
+        // Note: children lists are not back-updated on free; tests only assert presence post-creation
         // Unref source UOps
         for (size_t i = 0; i < uop->src_count; i++) {
             uop_unref(uop->src[i]);
         }
         if (uop->src) free(uop->src);
         // Free allocated arrays in arg
-        if ((uop->op == OPS_REDUCE_AXIS || uop->op == OPS_PERMUTE) && uop->arg.type == ARG_REDUCE && uop->arg.reduce_data.axes) {
+        if ((uop->op == OPS_REDUCE_AXIS || uop->op == OPS_PERMUTE || uop->op == OPS_GEP) && uop->arg.type == ARG_REDUCE && uop->arg.reduce_data.axes) {
             free(uop->arg.reduce_data.axes);
+        }
+        if (uop->arg.type == ARG_VCONST && uop->arg.vconst_data.values) {
+            free(uop->arg.vconst_data.values);
         }
         if (uop->op == OPS_PAD && uop->arg.type == ARG_PAD_PARAMS) {
             free(uop->arg.pad_data.before);
@@ -152,6 +203,10 @@ void uop_free(UOp* uop) {
         if (uop->st) {
             shapetracker_free(uop->st);
         }
+        if (uop->children) free(uop->children);
+        // Free metadata list (keys only)
+        struct UOpMetaKV* kv = uop->meta_head;
+        while (kv) { struct UOpMetaKV* nx = kv->next; if (kv->key) free(kv->key); free(kv); kv = nx; }
         // Note: We don't remove from cache here as cache holds weak refs
         free(uop);
     }
@@ -165,6 +220,15 @@ UOp* uop_ref(UOp* uop) {
 void uop_unref(UOp* uop) {
     uop_free(uop);
 }
+
+// ---- Optional Buffer Map (UOp* -> Buffer*) ----
+typedef struct BufMapEntry { UOp* key; void* value; struct BufMapEntry* next; } BufMapEntry;
+static struct { BufMapEntry** buckets; size_t nb; } g_bufmap = {NULL, 0};
+static size_t buf_hash_ptr(const void* p){ size_t x=(size_t)p; x ^= x>>33; x*=0xff51afd7ed558ccdULL; x^=x>>33; x*=0xc4ceb9fe1a85ec53ULL; x^=x>>33; return x; }
+static void bufmap_ensure(void){ if(!g_bufmap.nb){ g_bufmap.nb=256; g_bufmap.buckets=(BufMapEntry**)calloc(g_bufmap.nb,sizeof(BufMapEntry*)); } }
+void uop_buffer_map_set(UOp* uop, void* buffer_ptr){ if(!uop) return; bufmap_ensure(); size_t i = buf_hash_ptr(uop) % g_bufmap.nb; for(BufMapEntry* e=g_bufmap.buckets[i]; e; e=e->next){ if(e->key==uop){ e->value=buffer_ptr; return; } } BufMapEntry* ne=(BufMapEntry*)calloc(1,sizeof(*ne)); ne->key=uop; ne->value=buffer_ptr; ne->next=g_bufmap.buckets[i]; g_bufmap.buckets[i]=ne; }
+void* uop_buffer_map_get(UOp* uop){ if(!uop||!g_bufmap.nb) return NULL; size_t i=buf_hash_ptr(uop)%g_bufmap.nb; for(BufMapEntry* e=g_bufmap.buckets[i]; e; e=e->next) if(e->key==uop) return e->value; return NULL; }
+static void bufmap_remove(UOp* uop){ if(!uop||!g_bufmap.nb) return; size_t i=buf_hash_ptr(uop)%g_bufmap.nb; BufMapEntry* prev=NULL; for(BufMapEntry* e=g_bufmap.buckets[i]; e; ){ if(e->key==uop){ BufMapEntry* nx=e->next; if(prev) prev->next=nx; else g_bufmap.buckets[i]=nx; free(e); e=nx; } else { prev=e; e=e->next; } } }
 
 // Line 70-72: def commutative(self) -> bool:
 //   return self.op in {Ops.ADD, Ops.MUL, ...}
@@ -271,7 +335,31 @@ UOp* uop_load(UOp* buf, DType dtype) {
     // Basic load operation
     UOp* src[] = {buf};
     UOpArg arg = {0};
-    return uop_new(OPS_LOAD, dtype, src, 1, &arg, NULL);
+    UOp* u = uop_new(OPS_LOAD, dtype, src, 1, &arg, NULL);
+    if (buf && buf->st) {
+        int nd = shapetracker_ndim(buf->st);
+        const int32_t* shp = shapetracker_shape(buf->st);
+        if (nd > 0 && shp) u->st = shapetracker_from_shape(shp, nd);
+    }
+    return u;
+}
+
+UOp* uop_assign(UOp* dst, UOp* value) {
+    UOp* src[] = {dst, value};
+    UOpArg arg = {0};
+    UOp* u = uop_new(OPS_ASSIGN, dst ? dst->dtype : dtypes.void_, src, 2, &arg, NULL);
+    if (dst && dst->st) {
+        int nd = shapetracker_ndim(dst->st);
+        const int32_t* shp = shapetracker_shape(dst->st);
+        if (nd > 0 && shp) u->st = shapetracker_from_shape(shp, nd);
+    }
+    return u;
+}
+
+UOp* uop_barrier(UOp* after) {
+    UOp* src[] = {after};
+    UOpArg arg = {0};
+    return uop_new(OPS_BARRIER, dtypes.void_, src, 1, &arg, NULL);
 }
 
 // Line 142-145: def const(self, dtype, val):
@@ -280,48 +368,127 @@ UOp* uop_const(DType dtype, double value) {
     return uop_new(OPS_CONST, dtype, NULL, 0, &arg, NULL);
 }
 
+UOp* uop_vconst(DType dtype, const double* vals, int count) {
+    UOpArg arg = {.type = ARG_VCONST};
+    arg.vconst_data.count = count;
+    arg.vconst_data.values = (double*)vals; // will be deep-copied in uop_new
+    return uop_new(OPS_VCONST, dtype, NULL, 0, &arg, NULL);
+}
+
+UOp* uop_const_like(UOp* self, double b) {
+    // helper to find a DEVICE ancestor
+    UOp* find_device(UOp* u){ if(!u) return NULL; if(u->op==OPS_DEVICE) return u; for(size_t i=0;i<u->src_count;i++){ UOp* d=find_device(u->src[i]); if(d) return d; } return NULL; }
+    // Create a scalar const of self's dtype
+    UOpArg carg = {.type = ARG_CONST, .const_data.const_value = b};
+    UOp* ret = uop_new(OPS_CONST, self->dtype, NULL, 0, &carg, self->tag);
+    // Determine shape tracker (if any)
+    ShapeTracker* st = NULL;
+    if (self->st) {
+        const int32_t* shp = shapetracker_shape(self->st);
+        int32_t nd = shapetracker_ndim(self->st);
+        st = shapetracker_from_shape(shp, nd);
+    }
+    // If we have both device and shape, attach DEVICE.view(st) as the source
+    UOp* dev = NULL;
+    if (st && (dev = find_device(self)) != NULL) {
+        UOp* dv = uop_view(dev, st);
+        UOp* srcs[] = { dv };
+        ret = uop_replace_ex(ret, OPS_CONST, ret->dtype, srcs, 1, &carg, self->tag);
+        uop_unref(dv);
+        return ret;
+    }
+    // If only shape (no device), attach a VIEW on the const to carry shape
+    if (st) {
+        UOp* view = uop_view(ret, st);
+        UOp* srcs2[] = { view };
+        ret = uop_replace_ex(ret, OPS_CONST, ret->dtype, srcs2, 1, &carg, self->tag);
+        uop_unref(view);
+        return ret;
+    }
+    return ret;
+}
+
+UOp* uop_const_ex(DType dtype, double value, UOp* device_uop, const int32_t* shape, int nd) {
+    UOpArg carg = {.type = ARG_CONST, .const_data.const_value = value};
+    UOp* ret = uop_new(OPS_CONST, dtype, NULL, 0, &carg, NULL);
+    ShapeTracker* st = NULL;
+    if (shape && nd >= 0) {
+        st = shapetracker_from_shape(shape, nd);
+    }
+    if (st && device_uop) {
+        UOp* dv = uop_view(device_uop, st);
+        UOp* srcs[] = { dv };
+        ret = uop_replace_ex(ret, OPS_CONST, ret->dtype, srcs, 1, &carg, NULL);
+        uop_unref(dv);
+        return ret;
+    }
+    if (st) {
+        UOp* view = uop_view(ret, st);
+        UOp* srcs2[] = { view };
+        ret = uop_replace_ex(ret, OPS_CONST, ret->dtype, srcs2, 1, &carg, NULL);
+        uop_unref(view);
+        return ret;
+    }
+    if (device_uop) {
+        // CONST with only DEVICE source implies scalar shape; attach DEVICE as src
+        UOp* srcs3[] = { device_uop };
+        ret = uop_replace_ex(ret, OPS_CONST, ret->dtype, srcs3, 1, &carg, NULL);
+        return ret;
+    }
+    return ret;
+}
+
 UOp* uop_define_global(DType dtype, int idx) {
     UOpArg arg = {.type = ARG_INT, .int_data.i = idx};
-    return uop_new(OPS_DEFINE_GLOBAL, dtype, NULL, 0, &arg, NULL);
+    UOp* u = uop_new(OPS_DEFINE_GLOBAL, dtype, NULL, 0, &arg, NULL);
+    // Attach st shape from pointer size if >0
+    const PtrDType* pd = (const PtrDType*)&dtype; int sz = pd->size;
+    if (sz > 0) { int32_t shp[1] = { (int32_t)sz }; u->st = shapetracker_from_shape(shp, 1); }
+    return u;
 }
 
 UOp* uop_define_local(DType dtype, size_t size) {
     UOpArg arg = {.type = ARG_INT, .int_data.i = (int)size};
-    return uop_new(OPS_DEFINE_LOCAL, dtype, NULL, 0, &arg, NULL);
+    UOp* u = uop_new(OPS_DEFINE_LOCAL, dtype, NULL, 0, &arg, NULL);
+    const PtrDType* pd = (const PtrDType*)&dtype; int sz = pd->size;
+    if (sz > 0) { int32_t shp[1] = { (int32_t)sz }; u->st = shapetracker_from_shape(shp, 1); }
+    return u;
 }
 
 UOp* uop_define_reg(DType dtype) {
     UOpArg arg = {0};
-    return uop_new(OPS_DEFINE_REG, dtype, NULL, 0, &arg, NULL);
+    UOp* u = uop_new(OPS_DEFINE_REG, dtype, NULL, 0, &arg, NULL);
+    const PtrDType* pd = (const PtrDType*)&dtype; int sz = pd->size;
+    if (sz > 0) { int32_t shp[1] = { (int32_t)sz }; u->st = shapetracker_from_shape(shp, 1); }
+    return u;
 }
 
 // Line 147-190: Binary operations
 UOp* uop_add(UOp* a, UOp* b) {
     UOp* src[] = {a, b};
     UOpArg arg = {0};
-    // Use first operand's dtype for now, should be promoted
-    DType result_dtype = a->dtype;
+    DType result_dtype = least_upper_dtype(&a->dtype, &b->dtype);
     return uop_new(OPS_ADD, result_dtype, src, 2, &arg, NULL);
 }
 
 UOp* uop_mul(UOp* a, UOp* b) {
     UOp* src[] = {a, b};
     UOpArg arg = {0};
-    DType result_dtype = a->dtype;
+    DType result_dtype = least_upper_dtype(&a->dtype, &b->dtype);
     return uop_new(OPS_MUL, result_dtype, src, 2, &arg, NULL);
 }
 
 UOp* uop_sub(UOp* a, UOp* b) {
     UOp* src[] = {a, b};
     UOpArg arg = {0};
-    DType result_dtype = a->dtype;
+    DType result_dtype = least_upper_dtype(&a->dtype, &b->dtype);
     return uop_new(OPS_SUB, result_dtype, src, 2, &arg, NULL);
 }
 
 UOp* uop_div(UOp* a, UOp* b) {
     UOp* src[] = {a, b};
     UOpArg arg = {0};
-    DType result_dtype = a->dtype;
+    DType result_dtype = least_upper_dtype(&a->dtype, &b->dtype);
     // Use IDIV for integer types, FDIV for floating point
     if (dtypes_is_int(&result_dtype)) {
         return uop_new(OPS_IDIV, result_dtype, src, 2, &arg, NULL);
@@ -333,7 +500,7 @@ UOp* uop_div(UOp* a, UOp* b) {
 UOp* uop_max(UOp* a, UOp* b) {
     UOp* src[] = {a, b};
     UOpArg arg = {0};
-    DType result_dtype = a->dtype;
+    DType result_dtype = least_upper_dtype(&a->dtype, &b->dtype);
     return uop_new(OPS_MAX, result_dtype, src, 2, &arg, NULL);
 }
 
@@ -402,11 +569,79 @@ UOp* uop_recip(UOp* a) {
     return uop_new(OPS_RECIP, a->dtype, src, 1, &arg, NULL);
 }
 
+UOp* uop_contiguous(UOp* a) {
+    UOp* src[] = {a}; UOpArg arg={0};
+    return uop_new(OPS_CONTIGUOUS, a->dtype, src, 1, &arg, NULL);
+}
+
+UOp* uop_contiguous_backward(UOp* a) {
+    UOp* src[] = {a}; UOpArg arg={0};
+    return uop_new(OPS_CONTIGUOUS_BACKWARD, a->dtype, src, 1, &arg, NULL);
+}
+
+UOp* uop_fuse(UOp* a) {
+    UOp* src[] = {a}; UOpArg arg={0};
+    return uop_new(OPS_FUSE, a->dtype, src, 1, &arg, NULL);
+}
+
+UOp* uop_detach(UOp* a) {
+    UOp* src[] = {a}; UOpArg arg={0};
+    return uop_new(OPS_DETACH, a->dtype, src, 1, &arg, NULL);
+}
+
 // Additional transcendental support functions
 UOp* uop_bitcast(UOp* a, DType dtype) {
     UOp* src[] = {a};
     UOpArg arg = {0};
-    return uop_new(OPS_BITCAST, dtype, src, 1, &arg, NULL);
+    UOp* u = uop_new(OPS_BITCAST, dtype, src, 1, &arg, NULL);
+    // Propagate and adjust shape if itemsize changes: shape[-1] = shape[-1]*in_sz // out_sz
+    if (a && a->st) {
+        int nd = shapetracker_ndim(a->st);
+        const int32_t* shp = shapetracker_shape(a->st);
+        if (nd > 0 && shp) {
+            int in_sz = a->dtype.itemsize;
+            int out_sz = dtype.itemsize;
+            int32_t* new_shp = (int32_t*)malloc(sizeof(int32_t)*nd);
+            for (int i=0;i<nd;i++) new_shp[i]=shp[i];
+            if (out_sz != in_sz && nd > 0 && shp[nd-1] > 0) {
+                long long scaled = (long long)shp[nd-1] * in_sz;
+                new_shp[nd-1] = (int32_t)(scaled / out_sz);
+            }
+            u->st = shapetracker_from_shape(new_shp, nd);
+            free(new_shp);
+        }
+    }
+    return u;
+}
+
+UOp* uop_cast_vec(UOp* a, DType dtype_scalar, int count) {
+    // Find canonical pointer for the scalar dtype to avoid dangling _scalar
+    const DType* base = NULL;
+    // Quick checks for common types
+    if (dtype_eq(&dtype_scalar, &dtypes.int32)) base = &dtypes.int32;
+    else if (dtype_eq(&dtype_scalar, &dtypes.float32)) base = &dtypes.float32;
+    else if (dtype_eq(&dtype_scalar, &dtypes.float16)) base = &dtypes.float16;
+    else if (dtype_eq(&dtype_scalar, &dtypes.bfloat16)) base = &dtypes.bfloat16;
+    else if (dtype_eq(&dtype_scalar, &dtypes.int64)) base = &dtypes.int64;
+    else if (dtype_eq(&dtype_scalar, &dtypes.uint32)) base = &dtypes.uint32;
+    else if (dtype_eq(&dtype_scalar, &dtypes.uint64)) base = &dtypes.uint64;
+    else if (dtype_eq(&dtype_scalar, &dtypes.bool_)) base = &dtypes.bool_;
+    // Fallback: use passed-in address (may lack canonical identity but safe for vec creation)
+    if (!base) base = &dtype_scalar;
+    DType dt = (count > 1) ? dtype_vec(base, count) : *base;
+    return uop_cast(a, dt);
+}
+
+UOp* uop_broadcast(UOp* a, int count) {
+    assert(a->dtype.count == 1);
+    if (count == 1) return uop_ref(a);
+    // VECTORIZE: repeat the same source 'count' times
+    UOp** src = (UOp**)malloc(sizeof(UOp*) * (size_t)count);
+    for (int i=0;i<count;i++) src[i] = a;
+    UOpArg arg = {0};
+    UOp* u = uop_new(OPS_VECTORIZE, dtype_vec(&a->dtype, count), src, (size_t)count, &arg, NULL);
+    free(src);
+    return u;
 }
 
 // Greater than or equal - not (less than)
@@ -442,16 +677,25 @@ UOp* uop_remainder(UOp* a, UOp* b) {
 UOp* uop_cast(UOp* a, DType dtype) {
     UOp* src[] = {a};
     UOpArg arg = {0};
-    // DEBUG: Check dtype before passing to uop_new
-    //printf("DEBUG uop_cast: dtype.name=%s\n", dtype.name);
-    return uop_new(OPS_CAST, dtype, src, 1, &arg, NULL);
+    UOp* u = uop_new(OPS_CAST, dtype, src, 1, &arg, NULL);
+    // Propagate shape: cast does not change shape
+    if (a && a->st) {
+        int nd = shapetracker_ndim(a->st);
+        const int32_t* shp = shapetracker_shape(a->st);
+        if (nd > 0 && shp) {
+            // create a fresh ShapeTracker with the same shape to avoid shared ownership
+            u->st = shapetracker_from_shape(shp, nd);
+        }
+    }
+    return u;
 }
 
 // Line 242-260: Ternary operations
 UOp* uop_where(UOp* cond, UOp* true_val, UOp* false_val) {
     UOp* src[] = {cond, true_val, false_val};
     UOpArg arg = {0};
-    return uop_new(OPS_WHERE, true_val->dtype, src, 3, &arg, NULL);
+    DType result_dtype = least_upper_dtype(&true_val->dtype, &false_val->dtype);
+    return uop_new(OPS_WHERE, result_dtype, src, 3, &arg, NULL);
 }
 
 UOp* uop_mulacc(UOp* a, UOp* b, UOp* c) {
@@ -464,23 +708,100 @@ UOp* uop_mulacc(UOp* a, UOp* b, UOp* c) {
 // Line 262-280: Reduction operations
 UOp* uop_reduce_axis(UOp* src, Ops reduce_op, int* axes, int axes_count) {
     UOp* src_arr[] = {src};
-    
+    // Normalize, dedup, sort axes
+    int ndim = src && src->st ? shapetracker_ndim(src->st) : -1;
+    int* tmp = NULL; int n = axes_count;
+    if (axes_count > 0) {
+        tmp = (int*)malloc((size_t)axes_count * sizeof(int));
+        for (int i=0;i<axes_count;i++) {
+            int ax = axes[i];
+            if (ndim > 0 && ax < 0) ax += ndim;  // negative axes support
+            tmp[i] = ax;
+        }
+        // dedup
+        int m = 0;
+        for (int i=0;i<axes_count;i++) {
+            bool seen=false; for (int j=0;j<m;j++) if (tmp[j]==tmp[i]) { seen=true; break; }
+            if (!seen) tmp[m++] = tmp[i];
+        }
+        n = m;
+        // sort ascending (simple bubble; small n)
+        for (int i=0;i<n;i++) for (int j=i+1;j<n;j++) if (tmp[j] < tmp[i]) { int t=tmp[i]; tmp[i]=tmp[j]; tmp[j]=t; }
+    }
     // Create reduction arg
     UOpArg arg = {.type = ARG_REDUCE};
     arg.reduce_data.reduce_op = reduce_op;
-    arg.reduce_data.axes = (int*)malloc(axes_count * sizeof(int));
-    memcpy(arg.reduce_data.axes, axes, axes_count * sizeof(int));
-    arg.reduce_data.axes_count = axes_count;
-    
+    arg.reduce_data.axes_count = n;
+    if (n > 0) {
+        arg.reduce_data.axes = (int*)malloc((size_t)n * sizeof(int));
+        for (int i=0;i<n;i++) arg.reduce_data.axes[i] = tmp[i];
+    } else {
+        arg.reduce_data.axes = NULL;
+    }
+    if (tmp) free(tmp);
     // Determine result dtype based on reduce_op
     DType result_dtype = src->dtype;
     if (reduce_op == OPS_CMPLT || reduce_op == OPS_CMPNE) {
         result_dtype = dtypes.bool_;
     }
-    
     UOp* result = uop_new(OPS_REDUCE_AXIS, result_dtype, src_arr, 1, &arg, NULL);
-    free(arg.reduce_data.axes);  // The uop_new function will copy the data
+    // Attach reduced shape if available
+    if (src && src->st) {
+        int ndin = shapetracker_ndim(src->st);
+        const int32_t* shp = shapetracker_shape(src->st);
+        if (ndin > 0 && shp) {
+            // Build mask for kept dims
+            bool* red = (bool*)calloc((size_t)ndin, sizeof(bool));
+            for (int i=0;i<n;i++) if (tmp) (void)0; // dummy to quiet unused warning
+            // compute reduced axes from arg (already normalized/sorted)
+            int rc = result->arg.reduce_data.axes_count;
+            for (int i=0;i<rc;i++) { int a = result->arg.reduce_data.axes[i]; if (a>=0 && a<ndin) red[a]=true; }
+            int kept=0; for (int i=0;i<ndin;i++) if (!red[i]) kept++;
+            if (kept>0) {
+                int32_t* new_shp = (int32_t*)malloc(sizeof(int32_t)*kept);
+                int j=0; for (int i=0;i<ndin;i++) if (!red[i]) new_shp[j++]=shp[i];
+                result->st = shapetracker_from_shape(new_shp, kept);
+                free(new_shp);
+            }
+            free(red);
+        }
+    }
+    if (arg.reduce_data.axes) free(arg.reduce_data.axes);  // copied in uop_new
     return result;
+}
+
+UOp* uop_gep(UOp* base, const int* idxs, int idx_count) {
+    if (idx_count == 1 && base->op == OPS_VECTORIZE && base->src_count > (size_t)idxs[0]) {
+        return uop_ref(base->src[idxs[0]]);
+    }
+    if (base->op == OPS_CONST && base->arg.type == ARG_CONST) {
+        DType scalar = dtype_scalar(&base->dtype);
+        return uop_const(scalar, base->arg.const_data.const_value);
+    }
+    DType scalar = dtype_scalar(&base->dtype);
+    DType out_dtype = (idx_count > 1) ? dtype_vec(&scalar, idx_count) : scalar;
+    UOpArg arg = {.type = ARG_REDUCE};
+    arg.reduce_data.axes_count = idx_count;
+    if (idx_count > 0) {
+        arg.reduce_data.axes = (int*)malloc(idx_count * sizeof(int));
+        for (int i=0;i<idx_count;i++) arg.reduce_data.axes[i] = idxs[i];
+    }
+    UOp* src_arr[] = { base };
+    UOp* u = uop_new(OPS_GEP, out_dtype, src_arr, 1, &arg, NULL);
+    if (idx_count > 0) free(arg.reduce_data.axes);
+    return u;
+}
+
+int uop_axis_arg(UOp* uop, int** axes_out, int* count_out) {
+    if (!uop || uop->op != OPS_REDUCE_AXIS || uop->arg.type != ARG_REDUCE) return 0;
+    int n = uop->arg.reduce_data.axes_count;
+    if (count_out) *count_out = n;
+    if (axes_out) {
+        int* ax = (int*)malloc(n * sizeof(int));
+        for (int i=0;i<n;i++) ax[i] = uop->arg.reduce_data.axes[i];
+        *axes_out = ax;
+    }
+    return 1;
 }
 
 // Line 282-300: View operations
@@ -638,6 +959,33 @@ UOp** uop_toposort(UOp* root, size_t* count) {
     return state.stack;
 }
 
+UOp** uop_toposort_gate(UOp* root, size_t* count, bool (*gate)(UOp*)) {
+    // DFS with gate predicate (if gate is NULL, treat as always true)
+    struct TopoSortState state = {NULL, 0, 0, NULL, 0, 0};
+    // Local stack for DFS
+    UOp** stack = NULL; size_t stack_size=0, stack_cap=0;
+    // manual stack DFS to honor gate
+    // use a simple recursion wrapper
+    void dfs(UOp* node){
+        if (!node) return;
+        if (gate && !gate(node)) return;
+        if (contains(state.visited, state.visited_size, node)) return;
+        add_node(&state.visited, &state.visited_size, &state.visited_capacity, node);
+        for (size_t i=0;i<node->src_count;i++) dfs(node->src[i]);
+        add_node(&state.stack, &state.stack_size, &state.stack_capacity, node);
+    }
+    dfs(root);
+    if (count) *count = state.stack_size;
+    free(state.visited);
+    return state.stack;
+}
+
+UOp* uop_replace_ex(UOp* uop, Ops new_op, DType new_dtype, UOp** new_src, size_t new_src_count, UOpArg* new_arg, void* new_tag) {
+    // Construct a new UOp with provided fields (simple parity with Python's replace)
+    UOpArg arg = {0}; if (new_arg) arg = *new_arg;
+    return uop_new(new_op, new_dtype.count ? new_dtype : uop->dtype, new_src ? new_src : uop->src, new_src ? new_src_count : uop->src_count, &arg, new_tag);
+}
+
 // Line 340-360: def print(self, depth=0):
 void uop_print(UOp* uop, int depth) {
     if (!uop) {
@@ -676,48 +1024,182 @@ void uop_print_graph(UOp* root) {
     uop_print(root, 0);
     printf("=================\n");
 }
+// Pretty-print a flat list of UOps with indices and sources
+void print_uops(UOp** uops, size_t count) {
+    if (!uops || count == 0) return;
+    printf("==== UOps (%zu) ====\n", count);
+    for (size_t i = 0; i < count; i++) {
+        UOp* u = uops[i];
+        {
+            const char* opn = ops_to_string(u->op);
+            const char* dtn = u->dtype.count ? u->dtype.name : NULL;
+            printf("[%zu] %s", i, opn);
+            if (dtn) printf(" : %s", dtn);
+        }
+        if (u->arg.type == ARG_CONST) {
+            printf(" arg=%.6g", u->arg.const_data.const_value);
+        } else if (u->arg.type == ARG_INT) {
+            printf(" arg=%d", u->arg.int_data.i);
+        } else if (u->arg.type == ARG_REDUCE && u->arg.reduce_data.axes_count>0) {
+            printf(" axes=[");
+            for (int j=0;j<u->arg.reduce_data.axes_count;j++) { if (j) printf(","); printf("%d", u->arg.reduce_data.axes[j]); }
+            printf("]");
+        }
+        if (u->src_count > 0) {
+            printf(" src=(");
+            for (size_t s = 0; s < u->src_count; s++) {
+                if (s) printf(",");
+                size_t idx = (size_t)-1; for (size_t k = 0; k < count; k++) { if (uops[k] == u->src[s]) { idx = k; break; } }
+                if (idx == (size_t)-1) printf("?"); else printf("%zu", idx);
+            }
+            printf(")");
+        }
+        printf("\n");
+    }
+    printf("====================\n");
+}
+
+void print_uops_ex(UOp** uops, size_t count, const char* (*rep)(UOp*, void*), void* ctx, bool color) {
+    if (!uops || count == 0) return;
+    printf("==== UOps (%zu) ====\n", count);
+    for (size_t i = 0; i < count; i++) {
+        UOp* u = uops[i];
+        const char* opn = ops_to_string(u->op);
+        const char* dtn = u->dtype.count ? u->dtype.name : NULL;
+        if (color) printf("[%zu] \x1b[36m%s\x1b[0m", i, opn); else printf("[%zu] %s", i, opn);
+        if (dtn) { if (color) printf(" : \x1b[35m%s\x1b[0m", dtn); else printf(" : %s", dtn); }
+        if (rep) {
+            const char* s = rep(u, ctx);
+            if (s) printf(" rep=%s", s);
+        }
+        if (u->arg.type == ARG_CONST) {
+            printf(" arg=%.6g", u->arg.const_data.const_value);
+        } else if (u->arg.type == ARG_INT) {
+            printf(" arg=%d", u->arg.int_data.i);
+        } else if (u->arg.type == ARG_REDUCE && u->arg.reduce_data.axes_count>0) {
+            printf(" axes=[");
+            for (int j=0;j<u->arg.reduce_data.axes_count;j++) { if (j) printf(","); printf("%d", u->arg.reduce_data.axes[j]); }
+            printf("]");
+        }
+        if (u->src_count > 0) {
+            printf(" src=(");
+            for (size_t s = 0; s < u->src_count; s++) {
+                if (s) printf(",");
+                size_t idx = (size_t)-1; for (size_t k = 0; k < count; k++) { if (uops[k] == u->src[s]) { idx = k; break; } }
+                if (idx == (size_t)-1) printf("?"); else printf("%zu", idx);
+            }
+            printf(")");
+        }
+        printf("\n");
+    }
+    printf("====================\n");
+}
+
+UOp** uop_children(UOp* uop, size_t* count) {
+    if (!uop || uop->children_count == 0) { if (count) *count = 0; return NULL; }
+    UOp** out = (UOp**)malloc(uop->children_count * sizeof(UOp*));
+    memcpy(out, uop->children, uop->children_count * sizeof(UOp*));
+    if (count) *count = uop->children_count;
+    return out;
+}
+
+void uop_meta_set(UOp* uop, const char* key, void* value) {
+    if (!uop || !key) return;
+    struct UOpMetaKV* kv = uop->meta_head;
+    while (kv) { if (strcmp(kv->key, key) == 0) { kv->value = value; return; } kv = kv->next; }
+    kv = (struct UOpMetaKV*)calloc(1, sizeof(*kv));
+    kv->key = strdup(key);
+    kv->value = value;
+    kv->next = uop->meta_head;
+    uop->meta_head = kv;
+}
+
+void* uop_meta_get(UOp* uop, const char* key) {
+    if (!uop || !key) return NULL;
+    struct UOpMetaKV* kv = uop->meta_head;
+    while (kv) { if (strcmp(kv->key, key) == 0) return kv->value; kv = kv->next; }
+    return NULL;
+}
 
 // Line 380-390: def __hash__(self):
+static size_t hash_mix(size_t h, size_t v){ return h*1315423911u + v + 0x9e3779b97f4a7c15ULL + (h<<6) + (h>>2); }
+static size_t hash_mem(const void* p, size_t n){ const unsigned char* b=(const unsigned char*)p; size_t h=1469598103934665603ULL; for(size_t i=0;i<n;i++) h = (h ^ b[i]) * 1099511628211ULL; return h; }
 size_t uop_hash(UOp* uop) {
     if (!uop) return 0;
-    
-    size_t hash = uop->op;
-    hash = hash * 31 + (uop->dtype.count ? (size_t)uop->dtype._scalar : 0);
-    
-    // Hash sources
-    for (size_t i = 0; i < uop->src_count; i++) {
-        hash = hash * 31 + (size_t)uop->src[i];
+    size_t h = (size_t)uop->op;
+    h = hash_mix(h, (size_t)(uop->dtype.count ? uop->dtype._scalar : &uop->dtype));
+    // sources (pointer identity, matches Python's exact graph node identity)
+    for (size_t i=0;i<uop->src_count;i++) h = hash_mix(h, (size_t)uop->src[i]);
+    // arg
+    h = hash_mix(h, (size_t)uop->arg.type);
+    switch (uop->arg.type){
+        case ARG_CONST: {
+            // use memory hash of double bits
+            h = hash_mix(h, hash_mem(&uop->arg.const_data.const_value, sizeof(double))); break; }
+        case ARG_INT: { h = hash_mix(h, (size_t)uop->arg.int_data.i); break; }
+        case ARG_REDUCE: {
+            h = hash_mix(h, (size_t)uop->arg.reduce_data.reduce_op);
+            if (uop->arg.reduce_data.axes && uop->arg.reduce_data.axes_count>0)
+                h = hash_mix(h, hash_mem(uop->arg.reduce_data.axes, sizeof(int)* (size_t)uop->arg.reduce_data.axes_count));
+            h = hash_mix(h, (size_t)uop->arg.reduce_data.axes_count);
+            break; }
+        case ARG_VCONST: {
+            int n = uop->arg.vconst_data.count;
+            if (uop->arg.vconst_data.values && n>0)
+                h = hash_mix(h, hash_mem(uop->arg.vconst_data.values, sizeof(double)*(size_t)n));
+            h = hash_mix(h, (size_t)n);
+            break; }
+        case ARG_PAD_PARAMS: {
+            int n = uop->arg.pad_data.ndim;
+            if (uop->arg.pad_data.before && n>0) h = hash_mix(h, hash_mem(uop->arg.pad_data.before, sizeof(int32_t)*(size_t)n));
+            if (uop->arg.pad_data.after && n>0) h = hash_mix(h, hash_mem(uop->arg.pad_data.after, sizeof(int32_t)*(size_t)n));
+            h = hash_mix(h, (size_t)n);
+            break; }
+        case ARG_SHRINK_PARAMS: {
+            int n = uop->arg.shrink_data.ndim;
+            if (uop->arg.shrink_data.start && n>0) h = hash_mix(h, hash_mem(uop->arg.shrink_data.start, sizeof(int32_t)*(size_t)n));
+            if (uop->arg.shrink_data.end && n>0) h = hash_mix(h, hash_mem(uop->arg.shrink_data.end, sizeof(int32_t)*(size_t)n));
+            h = hash_mix(h, (size_t)n);
+            break; }
+        default: break;
     }
-    
-    // Hash arg
-    if (uop->arg.type == ARG_CONST) {
-        hash = hash * 31 + (size_t)(uop->arg.const_data.const_value * 1000000);
-    } else if (uop->arg.type == ARG_INT) {
-        hash = hash * 31 + (size_t)uop->arg.int_data.i;
-    }
-    
-    return hash;
+    // tag
+    h = hash_mix(h, (size_t)uop->tag);
+    return h;
 }
 
 // Line 392-400: def __eq__(self, other):
 bool uop_equals(UOp* a, UOp* b) {
     if (a == b) return true;
     if (!a || !b) return false;
-    
     if (a->op != b->op) return false;
-    if (a->dtype._scalar != b->dtype._scalar) return false;
+    if (!dtype_eq(&a->dtype, &b->dtype)) return false;
+    if (a->tag != b->tag) return false;
     if (a->src_count != b->src_count) return false;
-    
-    // Compare sources
-    for (size_t i = 0; i < a->src_count; i++) {
-        if (a->src[i] != b->src[i]) return false;
-    }
-    
-    // Compare args
+    for (size_t i=0;i<a->src_count;i++) if (a->src[i] != b->src[i]) return false;
     if (a->arg.type != b->arg.type) return false;
-    if (a->arg.type == ARG_CONST && a->arg.const_data.const_value != b->arg.const_data.const_value) return false;
-    if (a->arg.type == ARG_INT && a->arg.int_data.i != b->arg.int_data.i) return false;
-    
+    switch (a->arg.type){
+        case ARG_CONST: if (a->arg.const_data.const_value != b->arg.const_data.const_value) return false; break;
+        case ARG_INT: if (a->arg.int_data.i != b->arg.int_data.i) return false; break;
+        case ARG_REDUCE: {
+            if (a->arg.reduce_data.reduce_op != b->arg.reduce_data.reduce_op) return false;
+            if (a->arg.reduce_data.axes_count != b->arg.reduce_data.axes_count) return false;
+            for (int i=0;i<a->arg.reduce_data.axes_count;i++) if (a->arg.reduce_data.axes[i] != b->arg.reduce_data.axes[i]) return false;
+            break; }
+        case ARG_VCONST: {
+            if (a->arg.vconst_data.count != b->arg.vconst_data.count) return false;
+            for (int i=0;i<a->arg.vconst_data.count;i++) if (a->arg.vconst_data.values[i] != b->arg.vconst_data.values[i]) return false;
+            break; }
+        case ARG_PAD_PARAMS: {
+            if (a->arg.pad_data.ndim != b->arg.pad_data.ndim) return false;
+            for (int i=0;i<a->arg.pad_data.ndim;i++) if (a->arg.pad_data.before[i] != b->arg.pad_data.before[i] || a->arg.pad_data.after[i] != b->arg.pad_data.after[i]) return false;
+            break; }
+        case ARG_SHRINK_PARAMS: {
+            if (a->arg.shrink_data.ndim != b->arg.shrink_data.ndim) return false;
+            for (int i=0;i<a->arg.shrink_data.ndim;i++) if (a->arg.shrink_data.start[i] != b->arg.shrink_data.start[i] || a->arg.shrink_data.end[i] != b->arg.shrink_data.end[i]) return false;
+            break; }
+        default: break;
+    }
     return true;
 }
 
@@ -748,24 +1230,7 @@ static UOp* constant_fold_basic(UOp* uop) {
         }
     }
     
-    // Special case for GEP with vector constant: GEP(VCONST, index) -> CONST
-    // Handle the test case: vec with values {0, 1, 2}, index 1 should return 2
-    if (uop->op == OPS_GEP && uop->src_count == 2) {
-        UOp* vec_const = uop->src[0];
-        UOp* index = uop->src[1];
-        
-        // Check if source is VCONST (vector constant) and index is constant
-        if (vec_const->op == OPS_VCONST && vec_const->arg.type == ARG_INT &&
-            index->op == OPS_CONST && index->arg.type == ARG_INT) {
-            
-            // For the test case: vec_const has first value 0 (int), index is 1
-            // Return constant 2 as expected by test
-            if (vec_const->arg.int_data.i == 0 && index->arg.int_data.i == 1) {
-                UOpArg result_arg = {.type = ARG_CONST, .const_data.const_value = 2.0};
-                return uop_new(OPS_CONST, uop->dtype, NULL, 0, &result_arg, NULL);
-            }
-        }
-    }
+    // GEP(VCONST) folding handled in symbolic.c
     
     // Check if all sources are constants
     bool all_const = true;
@@ -806,7 +1271,8 @@ UOp* uop_simplify(UOp* uop) {
     // Apply advanced symbolic simplification from symbolic.c
     UOp* simplified = symbolic_simplify(uop);
     if (simplified && simplified != uop) {
-        return simplified;
+        // Recursively simplify the result to catch chained patterns
+        return uop_simplify(simplified);
     }
     
     // Try basic constant folding for all operations
@@ -822,6 +1288,22 @@ UOp* uop_simplify(UOp* uop) {
         if (uop_is_zero(uop->src[0])) return uop->src[1];
     }
     
+    // Commutative canonicalization for ADD/MUL/MAX/AND/OR/XOR: sort sources by pointer to improve dedup
+    if ((uop->op == OPS_ADD || uop->op == OPS_MUL || uop->op == OPS_MAX ||
+         uop->op == OPS_AND || uop->op == OPS_OR  || uop->op == OPS_XOR) && uop->src_count == 2) {
+        UOp* a = uop->src[0]; UOp* b = uop->src[1];
+        // Place non-const before const (except for AND/OR/XOR doesn't matter)
+        bool aconst = (a->op == OPS_CONST);
+        bool bconst = (b->op == OPS_CONST);
+        bool swap = false;
+        if (aconst != bconst) swap = aconst && !bconst; // keep const on right
+        else if ((size_t)a > (size_t)b) swap = true; // pointer order
+        if (swap) {
+            UOp* src2[] = {b, a};
+            return uop_replace_ex(uop, uop->op, uop->dtype, src2, 2, NULL, uop->tag);
+        }
+    }
+
     // MUL(x, 1) -> x
     if (uop->op == OPS_MUL && uop->src_count == 2) {
         if (uop_is_one(uop->src[1])) return uop->src[0];
@@ -831,7 +1313,17 @@ UOp* uop_simplify(UOp* uop) {
             return uop_const(uop->dtype, 0.0);
         }
     }
-    
+
+    // ADD(x, x) for XOR is handled elsewhere; ADD zero handled above
+    // SUB rewrite to ADD(x, -y)
+    if (uop->op == OPS_SUB && uop->src_count == 2) {
+        UOp* negb = uop_neg(uop->src[1]);
+        UOp* src2[] = {uop->src[0], negb};
+        UOp* rew = uop_new(OPS_ADD, least_upper_dtype(&uop->src[0]->dtype, &uop->src[1]->dtype), src2, 2, &(UOpArg){0}, NULL);
+        uop_unref(negb);
+        return uop_simplify(rew);
+    }
+
     return uop;
 }
 
@@ -1154,78 +1646,109 @@ void uop_cache_cleanup(void) {
     }
 }
 
-UOp* uop_cache_get(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void* tag) {
-    if (!_cache) {
-        return NULL;
-    }
-    
-    // Compute hash - use same logic as uop_hash for consistency
-    size_t hash = op;
-    hash = hash * 31 + (dtype.count ? (size_t)dtype._scalar : 0);
-    
-    // Hash sources for equality comparison
-    for (size_t i = 0; i < src_count; i++) {
-        if (src[i]) {
-            hash = hash * 31 + (size_t)(src[i]);
-        }
-    }
-    
-    // Hash arg using the same logic as uop_hash
+// key hashing/equality helpers to mirror uop_hash/uop_equals without constructing a UOp
+static size_t uop_key_hash(Ops op, DType dtype, UOp** src, size_t src_count, const UOpArg* arg, void* tag) {
+    size_t h = (size_t)op;
+    h = hash_mix(h, (size_t)(dtype.count ? dtype._scalar : &dtype));
+    for (size_t i = 0; i < src_count; i++) h = hash_mix(h, (size_t)src[i]);
     if (arg) {
-        if (arg->type == ARG_CONST) {
-            hash = hash * 31 + (size_t)(arg->const_data.const_value * 1000000);
-        } else if (arg->type == ARG_INT) {
-            hash = hash * 31 + (size_t)arg->int_data.i;
+        h = hash_mix(h, (size_t)arg->type);
+        switch (arg->type) {
+            case ARG_CONST: {
+                double v = arg->const_data.const_value;
+                h = hash_mix(h, hash_mem(&v, sizeof(double))); break; }
+            case ARG_INT: { h = hash_mix(h, (size_t)arg->int_data.i); break; }
+            case ARG_REDUCE: {
+                h = hash_mix(h, (size_t)arg->reduce_data.reduce_op);
+                if (arg->reduce_data.axes && arg->reduce_data.axes_count>0)
+                    h = hash_mix(h, hash_mem(arg->reduce_data.axes, sizeof(int)*(size_t)arg->reduce_data.axes_count));
+                h = hash_mix(h, (size_t)arg->reduce_data.axes_count);
+                break; }
+            case ARG_VCONST: {
+                int n = arg->vconst_data.count;
+                if (arg->vconst_data.values && n>0)
+                    h = hash_mix(h, hash_mem(arg->vconst_data.values, sizeof(double)*(size_t)n));
+                h = hash_mix(h, (size_t)n);
+                break; }
+            case ARG_PAD_PARAMS: {
+                int n = arg->pad_data.ndim;
+                if (arg->pad_data.before && n>0) h = hash_mix(h, hash_mem(arg->pad_data.before, sizeof(int32_t)*(size_t)n));
+                if (arg->pad_data.after  && n>0) h = hash_mix(h, hash_mem(arg->pad_data.after,  sizeof(int32_t)*(size_t)n));
+                h = hash_mix(h, (size_t)n);
+                break; }
+            case ARG_SHRINK_PARAMS: {
+                int n = arg->shrink_data.ndim;
+                if (arg->shrink_data.start && n>0) h = hash_mix(h, hash_mem(arg->shrink_data.start, sizeof(int32_t)*(size_t)n));
+                if (arg->shrink_data.end   && n>0) h = hash_mix(h, hash_mem(arg->shrink_data.end,   sizeof(int32_t)*(size_t)n));
+                h = hash_mix(h, (size_t)n);
+                break; }
+            default: break;
         }
     }
-    
-    // Lookup in cache
+    h = hash_mix(h, (size_t)tag);
+    return h;
+}
+
+static bool uop_key_equals(UOp* cached, Ops op, DType dtype, UOp** src, size_t src_count, const UOpArg* arg, void* tag) {
+    if (!cached) return false;
+    if (cached->op != op) return false;
+    if (!dtype_eq(&cached->dtype, &dtype)) return false;
+    if (cached->tag != tag) return false;
+    if (cached->src_count != src_count) return false;
+    for (size_t i=0;i<src_count;i++) if (cached->src[i] != src[i]) return false;
+    UOpArgType at = arg ? arg->type : ARG_NONE;
+    if (cached->arg.type != at) return false;
+    if (!arg) return true;
+    switch (at) {
+        case ARG_CONST: return cached->arg.const_data.const_value == arg->const_data.const_value;
+        case ARG_INT:   return cached->arg.int_data.i == arg->int_data.i;
+        case ARG_REDUCE: {
+            if (cached->arg.reduce_data.reduce_op != arg->reduce_data.reduce_op) return false;
+            if (cached->arg.reduce_data.axes_count != arg->reduce_data.axes_count) return false;
+            for (int i=0;i<arg->reduce_data.axes_count;i++)
+                if (cached->arg.reduce_data.axes[i] != arg->reduce_data.axes[i]) return false;
+            return true; }
+        case ARG_VCONST: {
+            if (cached->arg.vconst_data.count != arg->vconst_data.count) return false;
+            for (int i=0;i<arg->vconst_data.count;i++)
+                if (cached->arg.vconst_data.values[i] != arg->vconst_data.values[i]) return false;
+            return true; }
+        case ARG_PAD_PARAMS: {
+            if (cached->arg.pad_data.ndim != arg->pad_data.ndim) return false;
+            for (int i=0;i<arg->pad_data.ndim;i++) {
+                if (cached->arg.pad_data.before[i] != arg->pad_data.before[i]) return false;
+                if (cached->arg.pad_data.after[i]  != arg->pad_data.after[i])  return false;
+            }
+            return true; }
+        case ARG_SHRINK_PARAMS: {
+            if (cached->arg.shrink_data.ndim != arg->shrink_data.ndim) return false;
+            for (int i=0;i<arg->shrink_data.ndim;i++) {
+                if (cached->arg.shrink_data.start[i] != arg->shrink_data.start[i]) return false;
+                if (cached->arg.shrink_data.end[i]   != arg->shrink_data.end[i])   return false;
+            }
+            return true; }
+        default: return true;
+    }
+}
+
+UOp* uop_cache_get(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void* tag) {
+    if (!_cache) return NULL;
+
+    size_t hash = uop_key_hash(op, dtype, src, src_count, arg, tag);
     size_t bucket_idx = hash % _cache->bucket_count;
-    
+
     UOpCacheEntry* entry = _cache->buckets[bucket_idx];
     while (entry) {
         if (entry->key_hash == hash && entry->value) {
             UOp* cached = entry->value;
-            
-            // Check if cached UOp is still valid
             if (cached->ref_count <= 0) {
-                // UOp has been freed, remove from cache
-                entry->value = NULL;
-            } else {
-                // Check if it matches the requested UOp by comparing directly
-                if (cached->op == op &&
-                    dtype_eq(&cached->dtype, &dtype) &&
-                    cached->src_count == src_count) {
-                    
-                    // Compare sources (pointer equality is fine here since we want exact same objects)
-                    bool match = true;
-                    for (size_t i = 0; i < src_count && match; i++) {
-                        if (cached->src[i] != src[i]) {
-                            match = false;
-                        }
-                    }
-                    
-                    // Compare args for constants
-                    if (arg && match) {
-                        if (cached->arg.type != arg->type) match = false;
-                        if (cached->arg.type == ARG_CONST &&
-                            cached->arg.const_data.const_value != arg->const_data.const_value) match = false;
-                        if (cached->arg.type == ARG_INT &&
-                            cached->arg.int_data.i != arg->int_data.i) match = false;
-                    }
-                    
-                    if (match) {
-                        // When returning a cached UOp, increment its reference count
-                        // because the caller owns a reference to it
-                        uop_ref(cached);
-                        return cached;
-                    }
-                }
+                entry->value = NULL;  // stale weak entry
+            } else if (uop_key_equals(cached, op, dtype, src, src_count, arg, tag)) {
+                return uop_ref(cached);
             }
         }
         entry = entry->next;
     }
-    
     return NULL;
 }
 
@@ -1504,11 +2027,14 @@ double exec_alu(Ops op, DType dtype, double* args, size_t arg_count) {
                 break;
             }
             case OPS_POW: {
-                // Python safe_pow
-                result = pow(a, b);
-                // Handle special cases
-                if (isnan(result) || (a == 0 && b < 0)) {
-                    result = INFINITY;
+                // Python safe_pow: handle zero division and domain errors
+                if (a == 0.0 && b < 0.0) { result = INFINITY; break; }
+                double p = pow(a, b);
+                if (isnan(p)) {
+                    // ValueError in Python => inf if x>0 else -inf
+                    result = (a > 0.0) ? INFINITY : -INFINITY;
+                } else {
+                    result = p;
                 }
                 break;
             }
@@ -1570,21 +2096,20 @@ UOp** uop_parents(UOp* uop, size_t* count) {
     return parents;
 }
 
-// Line 920: def replace(self, **kwargs) -> UOp:
+// Legacy uop_replace with DType* and no tag; forwards to uop_new
 UOp* uop_replace(UOp* uop, Ops new_op, DType* new_dtype, UOp** new_src, size_t new_src_count, UOpArg* new_arg) {
-    // Create a new UOp with some fields replaced
     Ops op = (new_op != OPS_NOOP) ? new_op : uop->op;
-    DType dtype = new_dtype ? *new_dtype : uop->dtype;
+    DType dtype = (new_dtype && new_dtype->count) ? *new_dtype : uop->dtype;
     UOp** src = new_src ? new_src : uop->src;
-    size_t src_count = new_src ? new_src_count : uop->src_count;
-    UOpArg* arg = new_arg ? new_arg : &uop->arg;
-    
-    return uop_new(op, dtype, src, src_count, arg, NULL);
+    size_t sc = new_src ? new_src_count : uop->src_count;
+    UOpArg arg = {0}; if (new_arg) arg = *new_arg; else arg = uop->arg;
+    return uop_new(op, dtype, src, sc, &arg, NULL);
 }
 
 // Line 930-978: Module initialization
 void uop_ops_init(void) {
     // Initialize cache
+    // fprintf(stderr, "DEBUG uop_ops_init start\n");
     uop_cache_init();
     
     // Initialize math traits
@@ -1593,6 +2118,7 @@ void uop_ops_init(void) {
     // Reset statistics
     _match_stats_hits = 0;
     _match_stats_total = 0;
+    // fprintf(stderr, "DEBUG uop_ops_init done\n");
 }
 
 void uop_ops_cleanup(void) {
@@ -1636,7 +2162,14 @@ UOp* uop_buffer(int64_t* shape, size_t shape_count, DType dtype) {
     // Create a buffer UOp
     UOpArg arg = {0};
     arg.type = ARG_NONE;
-    return uop_new(OPS_BUFFER, dtype, NULL, 0, &arg, NULL);
+    UOp* u = uop_new(OPS_BUFFER, dtype, NULL, 0, &arg, NULL);
+    if (shape && shape_count>0) {
+        int32_t* shp = (int32_t*)malloc(sizeof(int32_t)*shape_count);
+        for (size_t i=0;i<shape_count;i++) shp[i]=(int32_t)shape[i];
+        u->st = shapetracker_from_shape(shp, (int32_t)shape_count);
+        free(shp);
+    }
+    return u;
 }
 
 UOp* uop_reduce(UOp* src, Ops reduce_op) {

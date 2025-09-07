@@ -155,6 +155,7 @@ typedef enum {
 typedef enum {
     ARG_NONE = 0,
     ARG_CONST,
+    ARG_VCONST,
     ARG_INT,
     ARG_REDUCE,
     ARG_SHAPE_TRACKER,
@@ -169,6 +170,10 @@ typedef struct UOpArg {
         struct {
             double const_value;
         } const_data;
+        struct {
+            double* values;  // vector constant values
+            int count;
+        } vconst_data;
         struct {
             int i;
         } int_data;
@@ -220,6 +225,13 @@ typedef struct {
 // Global GroupOp instance
 extern const GroupOp group_op;
 
+// Simple metadata KV list for optional metadata map
+typedef struct UOpMetaKV {
+    char* key;
+    void* value;
+    struct UOpMetaKV* next;
+} UOpMetaKV;
+
 // UOp structure - mirrors Python UOp class
 typedef struct UOp UOp;
 typedef struct UOpCacheEntry UOpCacheEntry;
@@ -238,11 +250,17 @@ typedef struct UOp {
     UOpArg arg;
     struct ShapeTracker* st;  // attached ShapeTracker for movement/view ops
     const MathTraitOps* math_ops;
+    void* tag;  // parity with Python cache key (op, dtype, src, arg, tag)
     int ref_count;
     // Symbolic range tracking - Python line 472-474
     int64_t vmin;  // minimum value in symbolic range
     int64_t vmax;  // maximum value in symbolic range
     bool vmin_vmax_valid;  // flag to indicate if vmin/vmax are computed
+    // Optional: children tracking and metadata map
+    UOp** children;
+    size_t children_count;
+    size_t children_cap;
+    struct UOpMetaKV* meta_head;
 } UOp;
 
 // Pattern matching structures
@@ -336,6 +354,10 @@ UOp* uop_sink(UOp** stores, size_t count);
 UOp* uop_store(UOp* buf, UOp* value);
 UOp* uop_load(UOp* buf, DType dtype);
 UOp* uop_const(DType dtype, double value);
+UOp* uop_vconst(DType dtype, const double* vals, int count);
+UOp* uop_const_like(UOp* self, double b);
+// Create CONST with optional device source and explicit shape
+UOp* uop_const_ex(DType dtype, double value, UOp* device_uop, const int32_t* shape, int nd);
 UOp* uop_define_global(DType dtype, int idx);
 UOp* uop_define_local(DType dtype, size_t size);
 UOp* uop_define_reg(DType dtype);
@@ -354,10 +376,18 @@ UOp* uop_log2(UOp* a);
 UOp* uop_sin(UOp* a);
 UOp* uop_sqrt(UOp* a);
 UOp* uop_recip(UOp* a);
+UOp* uop_contiguous(UOp* a);
+UOp* uop_contiguous_backward(UOp* a);
+UOp* uop_fuse(UOp* a);
+UOp* uop_detach(UOp* a);
 UOp* uop_cast(UOp* a, DType dtype);
+UOp* uop_cast_vec(UOp* a, DType dtype_scalar, int count);
+UOp* uop_broadcast(UOp* a, int count);
 UOp* uop_where(UOp* cond, UOp* true_val, UOp* false_val);
 UOp* uop_mulacc(UOp* a, UOp* b, UOp* c);
 UOp* uop_reduce_axis(UOp* src, Ops reduce_op, int* axes, int axes_count);
+UOp* uop_gep(UOp* base, const int* idxs, int idx_count);
+int uop_axis_arg(UOp* uop, int** axes_out, int* count_out);
 
 // Additional transcendental support functions
 UOp* uop_bitcast(UOp* a, DType dtype);
@@ -374,6 +404,8 @@ UOp* uop_mod(UOp* a, UOp* b);
 UOp* uop_gt(UOp* a, UOp* b);
 UOp* uop_view(UOp* buf, struct ShapeTracker* st);
 UOp* uop_index(UOp* buf, UOp* idx);
+UOp* uop_assign(UOp* dst, UOp* value);
+UOp* uop_barrier(UOp* after);
 // Movement ops
 UOp* uop_reshape(UOp* x, const int32_t* new_shape, int32_t new_ndim);
 UOp* uop_permute(UOp* x, const int32_t* axes, int32_t num_axes);
@@ -390,8 +422,19 @@ UOp* uop_range(UOp* n, int idx);
 UOp* uop_buffer(int64_t* shape, size_t shape_count, DType dtype);
 UOp* uop_reduce(UOp* src, Ops reduce_op);
 UOp** uop_toposort(UOp* root, size_t* count);
+UOp** uop_toposort_gate(UOp* root, size_t* count, bool (*gate)(UOp*));
 void uop_print(UOp* uop, int depth);
 void uop_print_graph(UOp* root);
+void print_uops(UOp** uops, size_t count);
+typedef const char* (*uop_rep_fn)(UOp* u, void* ctx);
+void print_uops_ex(UOp** uops, size_t count, uop_rep_fn rep, void* ctx, bool color);
+// Single-line pretty representation (heap-allocated; caller frees)
+char* uop_pretty_str(UOp* uop, bool color);
+
+// Replace utility (subset of Python replace semantics)
+UOp* uop_replace_ex(UOp* uop, Ops new_op, DType new_dtype, UOp** new_src, size_t new_src_count, UOpArg* new_arg, void* new_tag);
+// Legacy convenience (dtype pointer, no tag)
+UOp* uop_replace(UOp* uop, Ops new_op, DType* new_dtype, UOp** new_src, size_t new_src_count, UOpArg* new_arg);
 size_t uop_hash(UOp* uop);
 bool uop_equals(UOp* a, UOp* b);
 UOp* uop_simplify(UOp* uop);
@@ -409,7 +452,13 @@ bool uop_resolve_bool(UOp* uop);
 UOp* uop_cache_get(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void* tag);
 void uop_cache_put(UOp* uop);
 UOp** uop_parents(UOp* uop, size_t* count);
-UOp* uop_replace(UOp* uop, Ops new_op, DType* new_dtype, UOp** new_src, size_t new_src_count, UOpArg* new_arg);
+UOp** uop_children(UOp* uop, size_t* count);
+void uop_meta_set(UOp* uop, const char* key, void* value);
+void* uop_meta_get(UOp* uop, const char* key);
+
+// Optional buffer map (parity with Python's buffers WeakKeyDictionary)
+void uop_buffer_map_set(UOp* uop, void* buffer_ptr);
+void* uop_buffer_map_get(UOp* uop);
 
 // Pattern matching functions
 UPat* upat_op(Ops op, UPat** src, size_t src_count);

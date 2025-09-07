@@ -57,6 +57,63 @@ TEST(test_gep_const) {
     uop_unref(gep_result);
 }
 
+TEST(test_gep_gep_compose) {
+    // Compose nested GEP indices
+    double vals[5] = {10, 20, 30, 40, 50};
+    UOp* v = uop_vconst(dtype_vec(&dtypes.float32, 5), vals, 5);
+    int a[3] = {4, 2, 1};
+    int b[2] = {1, 0};
+    UOp* g2 = uop_gep(v, a, 3);        // picks [50,30,20]
+    UOp* g1 = uop_gep(g2, b, 2);       // picks [30,50] after composition
+    UOp* s = uop_simplify(g1);
+    // Expect direct fold to VCONST with [30,50]
+    TEST_ASSERT_EQUAL_INT(OPS_VCONST, s->op);
+    TEST_ASSERT_EQUAL_INT(ARG_VCONST, s->arg.type);
+    TEST_ASSERT_EQUAL_INT(2, s->arg.vconst_data.count);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-6, 30.0, s->arg.vconst_data.values[0]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-6, 50.0, s->arg.vconst_data.values[1]);
+    uop_unref(v); uop_unref(g2); uop_unref(g1); uop_unref(s);
+}
+
+TEST(test_vectorize_const_to_vconst) {
+    // VECTORIZE of CONSTs simplifies to VCONST
+    UOp* c0 = uop_const(dtypes.float32, 1.0);
+    UOp* c1 = uop_const(dtypes.float32, 2.0);
+    UOp* c2 = uop_const(dtypes.float32, 3.0);
+    UOp* srcs[] = {c0, c1, c2};
+    UOpArg arg = {0};
+    UOp* vec = uop_new(OPS_VECTORIZE, dtype_vec(&dtypes.float32, 3), srcs, 3, &arg, NULL);
+    UOp* s = uop_simplify(vec);
+    TEST_ASSERT_EQUAL_INT(OPS_VCONST, s->op);
+    TEST_ASSERT_EQUAL_INT(ARG_VCONST, s->arg.type);
+    TEST_ASSERT_EQUAL_INT(3, s->arg.vconst_data.count);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-6, 1.0, s->arg.vconst_data.values[0]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-6, 2.0, s->arg.vconst_data.values[1]);
+    TEST_ASSERT_DOUBLE_WITHIN(1e-6, 3.0, s->arg.vconst_data.values[2]);
+    uop_unref(c0); uop_unref(c1); uop_unref(c2); uop_unref(vec); uop_unref(s);
+}
+
+TEST(test_vectorize_gep_pack) {
+    // VECTORIZE of GEP(base, i) packs to single GEP(base, (i0,i1,...))
+    int64_t shape[1] = {4};
+    (void)shape; // shape unused in current buffer construct
+    DType vdt = dtype_vec(&dtypes.float32, 4);
+    UOp* base = uop_buffer(NULL, 0, vdt);
+    UOp* g0 = uop_gep(base, (int[]){3}, 1);
+    UOp* g1 = uop_gep(base, (int[]){1}, 1);
+    UOp* g2 = uop_gep(base, (int[]){2}, 1);
+    UOp* srcs[] = {g0, g1, g2};
+    UOp* vec = uop_new(OPS_VECTORIZE, dtype_vec(&dtypes.float32, 3), srcs, 3, NULL, NULL);
+    UOp* s = uop_simplify(vec);
+    TEST_ASSERT_EQUAL_INT(OPS_GEP, s->op);
+    TEST_ASSERT_EQUAL_INT(ARG_REDUCE, s->arg.type);
+    TEST_ASSERT_EQUAL_INT(3, s->arg.reduce_data.axes_count);
+    TEST_ASSERT_EQUAL_INT(3, s->arg.reduce_data.axes[0]);
+    TEST_ASSERT_EQUAL_INT(1, s->arg.reduce_data.axes[1]);
+    TEST_ASSERT_EQUAL_INT(2, s->arg.reduce_data.axes[2]);
+    uop_unref(base); uop_unref(g0); uop_unref(g1); uop_unref(g2); uop_unref(vec); uop_unref(s);
+}
+
 // Port of test_gep_const_single from Python  
 TEST(test_gep_const_single) {
     // Test GEP with single value vector constant

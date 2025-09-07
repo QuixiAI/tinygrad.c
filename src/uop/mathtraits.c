@@ -80,39 +80,21 @@ static UOp* binop_impl(UOp* self, Ops op, UOp* x, bool reverse) {
 
 // Line 13: def logical_not(self): return self.ne(True)
 static UOp* logical_not_impl(UOp* self) {
-    // self.ne(True) - not equal to true
-    UOp* true_val = const_like_impl(self, 1.0);
-    return binop_impl(self, OPS_CMPNE, true_val, false);
+    // Implement logical_not as eq(False) for boolean-like nodes
+    UOp* false_val = const_like_impl(self, 0.0);
+    return binop_impl(self, OPS_CMPEQ, false_val, false);
 }
 
 // Line 14-16: def neg(self):
 static UOp* neg_impl(UOp* self) {
-    // if (dtype:=getattr(self, 'dtype')) is None: raise TypeError(f"MathTraits __neg__ requires a dtype, {self=}")
     if (!self->dtype.count) {
         fprintf(stderr, "MathTraits __neg__ requires a dtype\n");
         return NULL;
     }
-    
-    // Manual allocation to avoid uop_new corruption completely
-    UOp* uop = (UOp*)calloc(1, sizeof(UOp));
-    if (!uop) return NULL;
-    
-    uop->op = OPS_NEG;
-    uop->dtype = self->dtype;
-    uop->src_count = 1;
-    uop->ref_count = 1;
-    
-    uop->src = (UOp**)malloc(sizeof(UOp*));
-    if (!uop->src) {
-        free(uop);
-        return NULL;
-    }
-    uop->src[0] = self;
-    uop_ref(self);
-    uop->math_ops = &math_ops;
-    uop->arg.type = ARG_NONE;
-    
-    return uop;
+    // if dtype.scalar() == dtypes.bool -> logical_not, else direct NEG op
+    DType scalar = dtype_scalar(&self->dtype);
+    if (dtype_eq(&scalar, &dtypes.bool_)) return logical_not_impl(self);
+    return alu_impl(self, OPS_NEG, NULL, 0);
 }
 
 // Line 17-20: def _check_dtype(self):
@@ -123,6 +105,7 @@ static void check_dtype_impl(UOp* self) {
         // if not (dtypes.is_bool(dtype) or dtypes.is_int(dtype)): raise RuntimeError
         if (!dtypes_is_bool(&dtype) && !dtypes_is_int(&dtype)) {
             fprintf(stderr, "%s is not supported\n", dtype.name);
+            abort();
         }
     }
 }
@@ -169,16 +152,12 @@ static UOp* mod_impl(UOp* self, UOp* x, bool reverse) {
 //   Create direct SUB op instead of mathematical transformation
 static UOp* sub_impl(UOp* self, UOp* x, bool reverse) {
     UOp* x_fixed = ufix_impl(self, (void*)x);
-    UOpArg arg = {0};
-    
     if (reverse) {
-        // x - self
-        UOp* src[] = {self, x_fixed};
-        return uop_new(OPS_SUB, self->dtype, src, 2, &arg, NULL);
+        UOp* src[] = { self };
+        return alu_impl(x_fixed, OPS_SUB, src, 1);
     } else {
-        // self - x
-        UOp* src[] = {self, x_fixed};
-        return uop_new(OPS_SUB, self->dtype, src, 2, &arg, NULL);
+        UOp* src[] = { x_fixed };
+        return alu_impl(self, OPS_SUB, src, 1);
     }
 }
 
@@ -237,7 +216,9 @@ static UOp* ne_impl(UOp* self, UOp* x) {
 static UOp* eq_impl(UOp* self, UOp* x) {
     UOp* x_fixed = ufix_impl(self, (void*)x);
     UOp* src[] = {x_fixed};
-    return alu_impl(self, OPS_CMPEQ, src, 1);
+    UOp* r = alu_impl(self, OPS_CMPEQ, src, 1);
+    // fprintf(stderr, "DEBUG eq_impl op=%d\n", r ? r->op : -1);
+    return r;
 }
 
 // Line 149-150: Shift operations
@@ -337,10 +318,22 @@ static UOp* alu_impl(UOp* self, Ops op, UOp** src, size_t src_count) {
     if (src_count > 0 && src[src_count - 1]) {
         out_dtype = src[src_count - 1]->dtype;
     }
+    // Binary numeric ops: promote via least_upper_dtype
+    if (src_count == 1 && (op == OPS_ADD || op == OPS_SUB || op == OPS_MUL || op == OPS_FDIV ||
+                           op == OPS_IDIV || op == OPS_MAX || op == OPS_MOD || op == OPS_SHL ||
+                           op == OPS_SHR || op == OPS_POW)) {
+        out_dtype = least_upper_dtype(&self->dtype, &src[0]->dtype);
+    }
+    // WHERE: promote dtype of branches (src[0] and src[1])
+    if (op == OPS_WHERE && src_count == 2) {
+        out_dtype = least_upper_dtype(&src[0]->dtype, &src[1]->dtype);
+    }
     
-    // For comparison ops, output is bool
+    // For comparison ops, output is bool (vectorized to last src count if needed)
     if (op == OPS_CMPLT || op == OPS_CMPNE || op == OPS_CMPEQ) {
+        int vcount = out_dtype.count;
         out_dtype = dtypes.bool_;
+        if (vcount > 1) out_dtype = dtype_vec(&dtypes.bool_, vcount);
     }
     
     // Build source array with self as first element
@@ -361,7 +354,7 @@ static UOp* alu_impl(UOp* self, Ops op, UOp** src, size_t src_count) {
 // Line 8: def const_like(self:T, b) -> T: raise NotImplementedError
 static UOp* const_like_impl(UOp* self, double value) {
     if (!self) return NULL;
-    return uop_const(self->dtype, value);
+    return uop_const_like(self, value);
 }
 
 // Global MathTraitOps instance - faithful port of Python MathTrait class
