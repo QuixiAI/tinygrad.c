@@ -25,6 +25,9 @@ find_package(GSL CONFIG REQUIRED)
 find_package(ZLIB QUIET)
 find_package(CURL CONFIG QUIET)
 find_package(capstone CONFIG QUIET)
+# Conan-provided packages
+find_package(glib CONFIG QUIET)
+find_package(libuv CONFIG QUIET)
 # sqlite3 is optional; prefer Conan's CONFIG package, fallback to CMake module
 find_package(sqlite3 CONFIG QUIET)
 if (NOT sqlite3_FOUND)
@@ -204,6 +207,29 @@ elseif (TARGET SQLite::SQLite3)
   target_compile_definitions(tinygradc PUBLIC TG_HAVE_SQLITE3=1)
 endif()
 
+# Link glib components if available (gio, gio-unix, glib, gobject)
+if (TARGET glib::gio)
+  target_link_libraries(tinygradc PUBLIC glib::gio)
+  target_compile_definitions(tinygradc PUBLIC TG_HAVE_GIO=1)
+endif()
+if (TARGET glib::gio-unix)
+  target_link_libraries(tinygradc PUBLIC glib::gio-unix)
+  target_compile_definitions(tinygradc PUBLIC TG_HAVE_GIO_UNIX=1)
+endif()
+if (TARGET glib::glib)
+  target_link_libraries(tinygradc PUBLIC glib::glib)
+  target_compile_definitions(tinygradc PUBLIC TG_HAVE_GLIB=1)
+endif()
+if (TARGET glib::gobject)
+  target_link_libraries(tinygradc PUBLIC glib::gobject)
+endif()
+
+# Link libuv if available
+if (TARGET uv)
+  target_link_libraries(tinygradc PUBLIC uv)
+  target_compile_definitions(tinygradc PUBLIC TG_HAVE_LIBUV=1)
+endif()
+
 # Link libm on Linux
 if(UNIX AND NOT APPLE)
   target_link_libraries(tinygradc PUBLIC m)
@@ -213,6 +239,8 @@ endif()
 if(BUILD_EXAMPLES)
   add_executable(resnet18_cpu examples/resnet18_cpu.c)
   target_link_libraries(resnet18_cpu PRIVATE tinygradc)
+  add_executable(debug_add examples/debug_add.c)
+  target_link_libraries(debug_add PRIVATE tinygradc)
 endif()
 
 # ---- Tests (Unity via Conan) ----

@@ -1330,16 +1330,27 @@ UOp* uop_simplify(UOp* uop) {
 UOp* uop_ssimplify(UOp* uop) {
     // Symbolic simplification with advanced patterns
     if (!uop) return NULL;
+    // Fast constant folding for simple binary ops before symbolic rewrite
+    if (uop->src_count == 2 && uop->op == OPS_ADD) {
+      UOp* a = uop->src[0]; UOp* b = uop->src[1];
+      if (a->op==OPS_CONST && b->op==OPS_CONST && a->arg.type==ARG_CONST && b->arg.type==ARG_CONST) {
+        UOp* r = uop_const(uop->dtype, a->arg.const_data.const_value + b->arg.const_data.const_value);
+        // fprintf(stderr, "uop_ssimplify pre-const-fold ADD -> CONST\n");
+        return r;
+      }
+    }
     
     // Apply comprehensive symbolic simplification from symbolic.c
     UOp* simplified = symbolic_ssimplify(uop);
     if (simplified && simplified != uop) {
+        // fprintf(stderr, "uop_ssimplify: symbolic_ssimplify changed op %d -> %d\n", uop->op, simplified->op);
         return simplified;
     }
     
     // Try basic constant folding for all operations
     UOp* folded = constant_fold_basic(uop);
     if (folded && folded != uop) {
+        // fprintf(stderr, "uop_ssimplify: constant_fold_basic folded op %d -> %d\n", uop->op, folded->op);
         return folded;
     }
     
