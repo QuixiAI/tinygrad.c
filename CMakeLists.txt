@@ -239,8 +239,6 @@ endif()
 if(BUILD_EXAMPLES)
   add_executable(resnet18_cpu examples/resnet18_cpu.c)
   target_link_libraries(resnet18_cpu PRIVATE tinygradc)
-  add_executable(debug_add examples/debug_add.c)
-  target_link_libraries(debug_add PRIVATE tinygradc)
 endif()
 
 # ---- Tests (Unity via Conan) ----
