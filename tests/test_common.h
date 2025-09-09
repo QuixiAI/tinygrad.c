@@ -52,7 +52,9 @@ void dtypes_cleanup(void);
             UnityDefaultTestRun(g_tests[i].func, g_tests[i].name, __LINE__); \
         } \
         int result = UNITY_END(); \
+        fprintf(stderr, "[tests] before dtypes_cleanup\n"); fflush(stderr); \
         dtypes_cleanup(); /* Cleanup dtype system */ \
+        fprintf(stderr, "[tests] after dtypes_cleanup\n"); fflush(stderr); \
         return result; \
     }
 

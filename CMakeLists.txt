@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(BUILD_TESTS "Build tests" ON)
 option(BUILD_EXAMPLES "Build examples" ON)
 option(ENABLE_WARNINGS "Enable compiler warnings" ON)
+option(TG_ASAN "Enable AddressSanitizer" OFF)
 
 if(ENABLE_WARNINGS)
   if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU|AppleClang")
@@ -18,6 +19,13 @@ endif()
 
 # Make all libs PIC so we can make plugins later (backends)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# Optional: AddressSanitizer support (via -DTG_ASAN=ON or ASAN=1 env)
+if (TG_ASAN OR DEFINED ENV{ASAN})
+  message(STATUS "AddressSanitizer enabled")
+  add_compile_options(-fsanitize=address -fno-omit-frame-pointer -O1)
+  add_link_options(-fsanitize=address)
+endif()
 
 # ---- Find dependencies ----
 find_package(unity CONFIG REQUIRED)

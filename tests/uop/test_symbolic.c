@@ -772,10 +772,11 @@ TEST(test_divmod_linear_combine_identity)
 
 TEST(test_index_true_gate_removed)
 {
-  UOp* buf = uop_new(OPS_DEFINE_VAR, dtype_ptr(&dtypes.float32), NULL, 0, NULL, "buf");
+  PtrDType pdt = dtype_ptr(&dtypes.float32, -1, ADDRSPACE_GLOBAL);
+  UOp* buf = uop_define_global(pdt.base, 0);
   UOp* idx = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, NULL, "i");
   UOpArg a={0}; UOp* srcs[]={buf, idx, uop_const(dtypes.bool_, 1.0)};
-  UOp* gated_idx = uop_new(OPS_INDEX, dtype_ptr(&dtypes.float32), srcs, 3, &a, NULL);
+  UOp* gated_idx = uop_new(OPS_INDEX, buf->dtype, srcs, 3, &a, NULL);
   UOp* load = uop_load(gated_idx, dtypes.float32);
   UOp* s = uop_simplify(load);
   ASSERT(s && s->op == OPS_LOAD && s->src_count==1);
@@ -784,10 +785,11 @@ TEST(test_index_true_gate_removed)
 
 TEST(test_index_false_gate_load_store)
 {
-  UOp* buf = uop_new(OPS_DEFINE_VAR, dtype_ptr(&dtypes.float32), NULL, 0, NULL, "buf");
+  PtrDType pdt = dtype_ptr(&dtypes.float32, -1, ADDRSPACE_GLOBAL);
+  UOp* buf = uop_define_global(pdt.base, 0);
   UOp* idx = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, NULL, "i");
   UOpArg a={0}; UOp* srcs[]={buf, idx, uop_const(dtypes.bool_, 0.0)};
-  UOp* gated_idx = uop_new(OPS_INDEX, dtype_ptr(&dtypes.float32), srcs, 3, &a, NULL);
+  UOp* gated_idx = uop_new(OPS_INDEX, buf->dtype, srcs, 3, &a, NULL);
   UOp* load = uop_load(gated_idx, dtypes.float32);
   UOp* sl = uop_simplify(load);
   ASSERT(sl && sl->op == OPS_CONST && sl->arg.type==ARG_CONST && sl->arg.const_data.const_value==0.0);
@@ -956,9 +958,10 @@ TEST(test_move_const_mul_post_reduce)
 
 TEST(test_store_load_noop)
 {
-  UOp* buf = uop_new(OPS_DEFINE_VAR, dtype_ptr(&dtypes.float32), NULL, 0, NULL, "buf");
+  PtrDType pdt = dtype_ptr(&dtypes.float32, -1, ADDRSPACE_GLOBAL);
+  UOp* buf = uop_define_global(pdt.base, 0);
   UOp* idx = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, NULL, "i");
-  UOp* index = uop_new(OPS_INDEX, dtype_ptr(&dtypes.float32), (UOp*[]){buf, idx}, 2, NULL, NULL);
+  UOp* index = uop_new(OPS_INDEX, buf->dtype, (UOp*[]){buf, idx}, 2, NULL, NULL);
   UOp* load = uop_load(index, dtypes.float32);
   UOp* store = uop_store(index, load);
   UOp* s = uop_simplify(store);
@@ -967,9 +970,10 @@ TEST(test_store_load_noop)
 
 TEST(test_store_gate_where_alt)
 {
-  UOp* buf = uop_new(OPS_DEFINE_VAR, dtype_ptr(&dtypes.float32), NULL, 0, NULL, "buf");
+  PtrDType pdt = dtype_ptr(&dtypes.float32, -1, ADDRSPACE_GLOBAL);
+  UOp* buf = uop_define_global(pdt.base, 0);
   UOp* idx = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, NULL, "i");
-  UOp* index = uop_new(OPS_INDEX, dtype_ptr(&dtypes.float32), (UOp*[]){buf, idx}, 2, NULL, NULL);
+  UOp* index = uop_new(OPS_INDEX, buf->dtype, (UOp*[]){buf, idx}, 2, NULL, NULL);
   UOp* load = uop_load(index, dtypes.float32);
   UOp* gate = uop_new(OPS_DEFINE_VAR, dtypes.bool_, NULL, 0, NULL, "g");
   UOp* alt = uop_const(dtypes.float32, 7.0);

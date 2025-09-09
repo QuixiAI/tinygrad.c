@@ -3,6 +3,7 @@ DOCKER_IMAGE ?= conanio/gcc11-ubuntu16.04:2.20.1
 
 # Quiet by default. Set QUIET=0 for verbose logs.
 QUIET ?= 1
+ASAN ?= 0
 ifeq ($(QUIET),1)
   MAKEFLAGS += -s
   CMAKE_BUILD_SILENT := -- -s
@@ -59,7 +60,7 @@ build:
 	  -DCMAKE_BUILD_TYPE=Release \
 	  -DCMAKE_TOOLCHAIN_FILE=build/conan/conan_toolchain.cmake \
 	  -DCMAKE_C_FLAGS="-DUNITY_INCLUDE_DOUBLE -DUNITY_INCLUDE_FLOAT" \
-	  $$( [ "${ASAN:-0}" = "1" ] && echo -DTG_ENABLE_ASAN=ON || true ) \
+	  $(if $(filter 1,$(ASAN)),-DTG_ENABLE_ASAN=ON,-DTG_ENABLE_ASAN=OFF) \
 	  > build/logs/cmake_configure.log 2>&1 || { echo "CMake configure failed. See build/logs/cmake_configure.log"; exit 1; }; \
 	echo "[cmake] building..."; \
 	cmake --build build -j $(CMAKE_BUILD_SILENT)

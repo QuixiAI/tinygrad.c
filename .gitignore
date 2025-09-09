@@ -1,6 +1,7 @@
 # Build outputs
 build
 build/
+build_asan/
 out/
 dist/
 *.build/

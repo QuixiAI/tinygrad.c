@@ -21,40 +21,28 @@
 
 int transcendental_mantissa_bits(DType* d) {
     if (!d) return 0;
-    
-    if (d->_scalar == dtypes.float64._scalar) {
-        return 52;  // Double precision mantissa bits
-    } else if (d->_scalar == dtypes.float32._scalar) {
-        return 23;  // Single precision mantissa bits
-    } else if (d->_scalar == dtypes.float16._scalar) {
-        return 10;  // Half precision mantissa bits
-    }
+    DType sc = dtype_scalar(d);
+    if (dtype_eq(&sc, &dtypes.float64)) return 52;
+    if (dtype_eq(&sc, &dtypes.float32)) return 23;
+    if (dtype_eq(&sc, &dtypes.float16)) return 10;
     return 0;
 }
 
 int transcendental_exponent_bias(DType* d) {
     if (!d) return 0;
-    
-    if (d->_scalar == &dtypes.float64) {
-        return 1023;
-    } else if (d->_scalar == &dtypes.float32) {
-        return 127;
-    } else if (d->_scalar == &dtypes.float16) {
-        return 15;
-    }
+    DType sc = dtype_scalar(d);
+    if (dtype_eq(&sc, &dtypes.float64)) return 1023;
+    if (dtype_eq(&sc, &dtypes.float32)) return 127;
+    if (dtype_eq(&sc, &dtypes.float16)) return 15;
     return 0;
 }
 
 int transcendental_exponent_mask(DType* d) {
     if (!d) return 0;
-    
-    if (d->_scalar == &dtypes.float64) {
-        return 2047;
-    } else if (d->_scalar == &dtypes.float32) {
-        return 255;
-    } else if (d->_scalar == &dtypes.float16) {
-        return 31;
-    }
+    DType sc = dtype_scalar(d);
+    if (dtype_eq(&sc, &dtypes.float64)) return 2047;
+    if (dtype_eq(&sc, &dtypes.float32)) return 255;
+    if (dtype_eq(&sc, &dtypes.float16)) return 31;
     return 0;
 }
 
@@ -74,14 +62,17 @@ UOp* transcendental_rintk(UOp* d) {
     // round d:float to int away from 0
     DType out_dtype;
     
-    if (d->dtype._scalar == &dtypes.float64) {
+    {
+        DType sc = dtype_scalar(&d->dtype);
+        if (dtype_eq(&sc, &dtypes.float64)) {
         out_dtype = dtype_vec(&dtypes.int64, d->dtype.count);
-    } else if (d->dtype._scalar == &dtypes.float32) {
+        } else if (dtype_eq(&sc, &dtypes.float32)) {
         out_dtype = dtype_vec(&dtypes.int32, d->dtype.count);
-    } else if (d->dtype._scalar == &dtypes.float16) {
+        } else if (dtype_eq(&sc, &dtypes.float16)) {
         out_dtype = dtype_vec(&dtypes.int16, d->dtype.count);
-    } else {
+        } else {
         return NULL;
+        }
     }
     
     // d + (d<0.0).where(d.const_like(-0.5), d.const_like(0.5)).cast(out_dtype)
@@ -93,18 +84,21 @@ UOp* transcendental_rintk(UOp* d) {
     return uop_cast(sum, out_dtype);
 }
 
-UOp* transcendental_pow2if(UOp* q, DType* float_dtype) {
+UOp* transcendental_pow2if(UOp* q, const DType* float_scalar) {
     // cast(2^q, float_dtype) where q is any integer in the range of [-126, 127]
     DType out_dtype;
     
-    if (q->dtype._scalar == &dtypes.int64) {
+    {
+        DType scq = dtype_scalar(&q->dtype);
+        if (dtype_eq(&scq, &dtypes.int64)) {
         out_dtype = dtype_vec(&dtypes.float64, q->dtype.count);
-    } else if (q->dtype._scalar == &dtypes.int32) {
+        } else if (dtype_eq(&scq, &dtypes.int32)) {
         out_dtype = dtype_vec(&dtypes.float32, q->dtype.count);
-    } else if (q->dtype._scalar == &dtypes.int16) {
-        out_dtype = dtype_vec(float_dtype, q->dtype.count);
-    } else {
+        } else if (dtype_eq(&scq, &dtypes.int16)) {
+        out_dtype = dtype_vec(float_scalar, q->dtype.count);
+        } else {
         return NULL;
+        }
     }
     
     // shl(q + exponent_bias(out_dtype), mantissa_bits(out_dtype)).bitcast(out_dtype)
@@ -116,19 +110,24 @@ UOp* transcendental_pow2if(UOp* q, DType* float_dtype) {
 
 UOp* transcendental_ilogb2k(UOp* d) {
     // calculate the integer part of log2(d), where d is normalized fp value in the range of [0, +inf).
-    if (d->dtype._scalar != &dtypes.float16 && d->dtype._scalar != &dtypes.float32 &&
-        d->dtype._scalar != &dtypes.float64) {
+    {
+        DType scd = dtype_scalar(&d->dtype);
+        if (!dtype_eq(&scd, &dtypes.float16) && !dtype_eq(&scd, &dtypes.float32) && !dtype_eq(&scd, &dtypes.float64)) {
         return NULL;
+        }
     }
     
     // DType to cast to
     DType int_dtype;
-    if (d->dtype._scalar == &dtypes.float64) {
+    {
+        DType sc = dtype_scalar(&d->dtype);
+        if (dtype_eq(&sc, &dtypes.float64)) {
         int_dtype = dtype_vec(&dtypes.int64, d->dtype.count);
-    } else if (d->dtype._scalar == &dtypes.float32) {
+        } else if (dtype_eq(&sc, &dtypes.float32)) {
         int_dtype = dtype_vec(&dtypes.int32, d->dtype.count);
-    } else {
+        } else {
         int_dtype = dtype_vec(&dtypes.int16, d->dtype.count);
+        }
     }
     
     // d.bitcast(int_dtype)
@@ -144,23 +143,28 @@ UOp* transcendental_ilogb2k(UOp* d) {
 
 UOp* transcendental_ldexp3k(UOp* d, UOp* e) {
     // d*2^e. e is a number obtained by casting an integer in the range [-127, 127] to a float. d is any float number.
-    if (d->dtype._scalar != &dtypes.float16 && d->dtype._scalar != &dtypes.float32 &&
-        d->dtype._scalar != &dtypes.float64) {
+    {
+        DType sc = dtype_scalar(&d->dtype);
+        if (!dtype_eq(&sc, &dtypes.float16) && !dtype_eq(&sc, &dtypes.float32) && !dtype_eq(&sc, &dtypes.float64)) {
         return NULL;
+        }
     }
     
-    if (e->dtype._scalar != &dtypes.float16 && e->dtype._scalar != &dtypes.float32 &&
-        e->dtype._scalar != &dtypes.float64) {
-        return NULL;
+    {
+        DType sce = dtype_scalar(&e->dtype);
+        if (!dtype_eq(&sce, &dtypes.float16) && !dtype_eq(&sce, &dtypes.float32) && !dtype_eq(&sce, &dtypes.float64)) return NULL;
     }
     
     DType int_dtype;
-    if (d->dtype._scalar == &dtypes.float64) {
-        int_dtype = dtype_vec(&dtypes.int64, d->dtype.count);
-    } else if (d->dtype._scalar == &dtypes.float32) {
-        int_dtype = dtype_vec(&dtypes.int32, d->dtype.count);
-    } else {
-        int_dtype = dtype_vec(&dtypes.int16, d->dtype.count);
+    {
+        DType scd = dtype_scalar(&d->dtype);
+        if (dtype_eq(&scd, &dtypes.float64)) {
+            int_dtype = dtype_vec(&dtypes.int64, d->dtype.count);
+        } else if (dtype_eq(&scd, &dtypes.float32)) {
+            int_dtype = dtype_vec(&dtypes.int32, d->dtype.count);
+        } else {
+            int_dtype = dtype_vec(&dtypes.int16, d->dtype.count);
+        }
     }
     
     // m1 = d.bitcast(dtype)
@@ -178,84 +182,85 @@ UOp* transcendental_ldexp3k(UOp* d, UOp* e) {
 
 UOp* transcendental_ldexp2k(UOp* d, UOp* e) {
     // d*2^e. much faster than ldexp3k but risky. d > 0 and d is not denormal.
-    if (d->dtype._scalar != &dtypes.float16 && d->dtype._scalar != &dtypes.float32 &&
-        d->dtype._scalar != &dtypes.float64) {
+    {
+        DType sc = dtype_scalar(&d->dtype);
+        if (!dtype_eq(&sc, &dtypes.float16) && !dtype_eq(&sc, &dtypes.float32) && !dtype_eq(&sc, &dtypes.float64)) {
         return NULL;
+        }
     }
     
-    if (e->dtype._scalar != &dtypes.int16 && e->dtype._scalar != &dtypes.int32 &&
-        e->dtype._scalar != &dtypes.int64) {
+    {
+        DType sce = dtype_scalar(&e->dtype);
+        if (!dtype_eq(&sce, &dtypes.int16) && !dtype_eq(&sce, &dtypes.int32) && !dtype_eq(&sce, &dtypes.int64)) {
         return NULL;
+        }
     }
     
     // (d * pow2if(shr(e, 1), d.dtype)) * pow2if(e - shr(e, 1), d.dtype)
     UOp* e_half = transcendental_shr(e, 1);
-    UOp* pow1 = transcendental_pow2if(e_half, &d->dtype);
+    DType scdf = dtype_scalar(&d->dtype);
+    const DType* sc_float = dtype_eq(&scdf, &dtypes.float64) ? &dtypes.float64 : (dtype_eq(&scdf, &dtypes.float32) ? &dtypes.float32 : &dtypes.float16);
+    UOp* pow1 = transcendental_pow2if(e_half, sc_float);
     UOp* temp1 = uop_mul(d, pow1);
     
     UOp* e_half2 = transcendental_shr(e, 1);
     UOp* e_diff = uop_sub(e, e_half2);
-    UOp* pow2 = transcendental_pow2if(e_diff, &d->dtype);
+    UOp* pow2 = transcendental_pow2if(e_diff, sc_float);
     
     return uop_mul(temp1, pow2);
 }
 
 UOp** transcendental_frexp(UOp* v, UOp** mantissa, UOp** exponent) {
     // frexp(v) -> (mantissa, exponent) assuming v != 0
-    if (v->dtype._scalar != &dtypes.float16 && v->dtype._scalar != &dtypes.float32 &&
-        v->dtype._scalar != &dtypes.float64) {
-        return NULL;
-    }
-    
+    DType scv = dtype_scalar(&v->dtype);
+    if (!dtype_eq(&scv, &dtypes.float16) && !dtype_eq(&scv, &dtypes.float32) && !dtype_eq(&scv, &dtypes.float64)) return NULL;
+
     *mantissa = NULL;
     *exponent = NULL;
-    
+
     // m1 = masks for mantissa, m2 = masks to normalize the mantissa.
     uint64_t m1, m2;
-    if (v->dtype._scalar == &dtypes.float64) {
+    if (dtype_eq(&scv, &dtypes.float64)) {
         m1 = 0x000FFFFFFFFFFFFF;
         m2 = 0x3FE0000000000000;
-    } else if (v->dtype._scalar == &dtypes.float32) {
+    } else if (dtype_eq(&scv, &dtypes.float32)) {
         m1 = 0x807FFFFF;
         m2 = 0x3F000000;
     } else {
         m1 = 0x83FF;
         m2 = 0x3800;
     }
-    
+
     DType uint_dtype;
-    if (v->dtype._scalar == &dtypes.float64) {
+    if (dtype_eq(&scv, &dtypes.float64)) {
         uint_dtype = dtype_vec(&dtypes.uint64, v->dtype.count);
-    } else if (v->dtype._scalar == &dtypes.float32) {
+    } else if (dtype_eq(&scv, &dtypes.float32)) {
         uint_dtype = dtype_vec(&dtypes.uint32, v->dtype.count);
     } else {
         uint_dtype = dtype_vec(&dtypes.uint16, v->dtype.count);
     }
-    
+
     // bits = v.bitcast(uint_dtype)
     UOp* bits = uop_bitcast(v, uint_dtype);
-    
+
     // exponent = shr(bits, mantissa_bits(v.dtype)) & exponent_mask(v.dtype)
-    // UOp* mantissa_bits_val = uop_const(bits->dtype, transcendental_mantissa_bits(&v->dtype));
-    // Unused variable - remove if needed or use in implementation
     UOp* shr_result = transcendental_shr(bits, transcendental_mantissa_bits(&v->dtype));
     UOp* exponent_mask_val = uop_const(bits->dtype, transcendental_exponent_mask(&v->dtype));
     *exponent = uop_and(shr_result, exponent_mask_val);
-    
-    // Set the exponent bits appropriately to normalize the mantissa into the range of [0.5, 1.0).
+
     // mantissa = ((bits & m1) | m2).bitcast(v.dtype)
     UOp* m1_const = uop_const(bits->dtype, m1);
     UOp* masked_and = uop_and(bits, m1_const);
     UOp* m2_const = uop_const(bits->dtype, m2);
     UOp* masked_or = uop_or(masked_and, m2_const);
     *mantissa = uop_bitcast(masked_or, v->dtype);
-    
+
     // exp = exponent - exponent_bias(v.dtype) + 1
-    UOp* bias = uop_const(exponent[0]->dtype, transcendental_exponent_bias(&v->dtype));
+    UOp* bias = uop_const((*exponent)->dtype, transcendental_exponent_bias(&v->dtype));
     UOp* bias_sub = uop_sub(*exponent, bias);
     UOp* one = uop_const(bias_sub->dtype, 1.0);
     *exponent = uop_add(bias_sub, one);
-    
+
     return mantissa;
 }
 
@@ -267,9 +272,11 @@ UOp** transcendental_payne_hanek_reduction(UOp* d, UOp** r_result, UOp** q_resul
     // Returns a tuple of `(r, q)`:
     // - `r`[d.dtype] is the reminder value corresponding to `round_to_nearest(x % pi/2)`.
     // - `q`[int32] is an integer, and q % 4 is corresponding to the quadrant of the original angle `d`.
-    if (d->dtype._scalar != &dtypes.float16 && d->dtype._scalar != &dtypes.float32 &&
-        d->dtype._scalar != &dtypes.float64) {
+    {
+        DType sc = dtype_scalar(&d->dtype);
+        if (!dtype_eq(&sc, &dtypes.float16) && !dtype_eq(&sc, &dtypes.float32) && !dtype_eq(&sc, &dtypes.float64)) {
         return NULL;
+        }
     }
     
     *r_result = NULL;
@@ -290,9 +297,9 @@ UOp** transcendental_cody_waite_reduction(UOp* d, UOp** r_result, UOp** q_result
     //     0 <= abs(d) <= 39800.0
     // Returns a tuple of `(r, q)`, where the output format is the same as that of `payne_hanek_reduction`.
     
-    if (d->dtype._scalar != &dtypes.float16 && d->dtype._scalar != &dtypes.float32 &&
-        d->dtype._scalar != &dtypes.float64) {
-        return NULL;
+    {
+        DType sc = dtype_scalar(&d->dtype);
+        if (!dtype_eq(&sc, &dtypes.float16) && !dtype_eq(&sc, &dtypes.float32) && !dtype_eq(&sc, &dtypes.float64)) return NULL;
     }
     
     *r_result = NULL;
@@ -316,10 +323,10 @@ UOp* transcendental_trig_poly(UOp* d, double coeff32[], int coeff32_count, doubl
     // d * (polyN(d*d, coeff64) if d.dtype.scalar() == dtypes.float64 else polyN(d*d, coeff32))
     UOp* d_squared = uop_mul(d, d);
     
-    const DType* scalar_type = d->dtype._scalar;
+    DType scalar_type = dtype_scalar(&d->dtype);
     UOp* poly_result;
     
-    if (scalar_type == dtypes.float64._scalar && coeff64_count > 0) {
+    if (dtype_eq(&scalar_type, &dtypes.float64) && coeff64_count > 0) {
         // Simplified polynomial evaluation for float64
         poly_result = uop_const(d_squared->dtype, coeff64[0]);
         for (int i = 1; i < coeff64_count; i++) {
@@ -460,9 +467,9 @@ UOp* transcendental_xexp2(UOp* x) {
     
     // a polynomial approximation with 13 non-zero terms in the range of [−(log 2)/2,(log 2)/2].
     UOp* u;
-    const DType* scalar_type = x->dtype._scalar;
+    DType scalar_type = dtype_scalar(&x->dtype);
     
-    if (scalar_type == dtypes.float64._scalar) {
+    if (dtype_eq(&scalar_type, &dtypes.float64)) {
         u = transcendental_trig_poly(s,
             NULL, 0,
             (double[]){0.4434359082926529454e-9, 0.7073164598085707425e-8, 0.1017819260921760451e-6, 0.1321543872511327615e-5, 0.1525273353517584730e-4,
@@ -481,10 +488,10 @@ UOp* transcendental_xexp2(UOp* x) {
     
     // upper, lower = {dtypes.float64: (1024, -2000), dtypes.float32: (128, -150), dtypes.float16: (23, -22)}[d.dtype.scalar()]
     struct { int upper; int lower; } bounds;
-    if (scalar_type == dtypes.float64._scalar) {
+    if (dtype_eq(&scalar_type, &dtypes.float64)) {
         bounds.upper = 1024;
         bounds.lower = -2000;
-    } else if (scalar_type == dtypes.float32._scalar) {
+    } else if (dtype_eq(&scalar_type, &dtypes.float32)) {
         bounds.upper = 128;
         bounds.lower = -150;
     } else {
@@ -508,12 +515,16 @@ UOp* transcendental_xlog2(UOp* x) {
     // Implements a 1.0 ULP approximation for Ops.LOG2
     // Paper: https://arxiv.org/pdf/2001.09258 5.5
     
-    if (x->dtype._scalar == dtypes.float16._scalar) {
-        return uop_cast(transcendental_xlog2(uop_cast(x, dtype_vec(&dtypes.float32, x->dtype.count))), x->dtype);
+    {
+        DType sc = dtype_scalar(&x->dtype);
+        if (dtype_eq(&sc, &dtypes.float16)) {
+            return uop_cast(transcendental_xlog2(uop_cast(x, dtype_vec(&dtypes.float32, x->dtype.count))), x->dtype);
+        }
     }
     
     // FLT_MIN = d.const_like(1e-6 if d.dtype.scalar() == dtypes.float16 else 1e-4)
-    double flt_min = (x->dtype._scalar == dtypes.float16._scalar) ? 1e-6 : 1e-4;
+    DType sc2 = dtype_scalar(&x->dtype);
+    double flt_min = dtype_eq(&sc2, &dtypes.float16) ? 1e-6 : 1e-4;
     UOp* flt_min_const = uop_const(x->dtype, flt_min);
     UOp* is_denormal = uop_lt(x, flt_min_const);
     
@@ -522,7 +533,7 @@ UOp* transcendental_xlog2(UOp* x) {
     
     // e = ilogb2k(a * (1.0 / 0.75)).cast(a.dtype)
     UOp* seventy_five = uop_const(a->dtype, 0.75);
-    UOp* inverted = uop_div(seventy_five, uop_const(a->dtype, 1.0));
+    UOp* inverted = uop_div(uop_const(a->dtype, 1.0), seventy_five);
     UOp* scaled = uop_mul(a, inverted);
     UOp* e = uop_cast(transcendental_ilogb2k(scaled), a->dtype);
     
@@ -545,9 +556,9 @@ UOp* transcendental_xlog2(UOp* x) {
     UOp* x2 = uop_mul(x_val, x_val);
     
     UOp* t, *s_hi, *s_lo;
-    const DType* scalar_type = x->dtype._scalar;
+    DType scalar_type = dtype_scalar(&x->dtype);
     
-    if (scalar_type == dtypes.float64._scalar) {
+    if (dtype_eq(&scalar_type, &dtypes.float64)) {
         t = transcendental_trig_poly(x2,
             NULL, 0,
             (double[]){0.2211941750456081490e+0, 0.2200768693152277689e+0, 0.2623708057488514656e+0, 0.3205977477944495502e+0,
@@ -580,9 +591,9 @@ UOp* transcendental_xlog2(UOp* x) {
     
     // log2(0) = -Inf
     struct { int log2_zero; } limits;
-    if (scalar_type == dtypes.float64._scalar) {
+    if (dtype_eq(&scalar_type, &dtypes.float64)) {
         limits.log2_zero = -1087;
-    } else if (scalar_type == dtypes.float32._scalar) {
+    } else if (dtype_eq(&scalar_type, &dtypes.float32)) {
         limits.log2_zero = -191;
     } else {
         limits.log2_zero = -79;
@@ -604,6 +615,19 @@ UOp* transcendental_xlog2(UOp* x) {
 
 UOp* transcendental_xpow(UOp* base, UOp* exponent) {
     // start with b ** e = exp2(e * log2(b))
+    // Fast path: positive constant base — avoid building large xlog2 graph
+    if (base && base->op == OPS_CONST) {
+        double cval = 0.0;
+        if (base->arg.type == ARG_CONST) cval = base->arg.const_data.const_value;
+        else if (base->arg.type == ARG_INT) cval = (double)base->arg.int_data.i;
+        if (cval > 0.0) {
+            UOp* k = uop_const(exponent->dtype, log2(cval));
+            UOp* mul = uop_mul(exponent, k);
+            return transcendental_xexp2(mul);
+        }
+        // fall through to general handling for cval <= 0
+    }
+
     UOp* base_abs = uop_where(uop_lt(base, uop_const(base->dtype, 0.0)), uop_neg(base), base);
     UOp* log2_base = transcendental_xlog2(base_abs);
     UOp* mul = uop_mul(exponent, log2_base);

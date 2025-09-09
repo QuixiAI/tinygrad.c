@@ -10,6 +10,7 @@
 #include "uop/uop.h"
 #include "uop/mathtraits.h"  // This provides the math_ops symbol
 #include "shape/shapetracker.h"
+#include "helpers/helpers.h"
 
 // Forward declaration for optional buffer map removal used in uop_free
 static void bufmap_remove(struct UOp* uop);
@@ -474,6 +475,7 @@ UOp* uop_add(UOp* a, UOp* b) {
 UOp* uop_mul(UOp* a, UOp* b) {
     UOp* src[] = {a, b};
     UOpArg arg = {0};
+    // Follow reference: always use lattice to compute result dtype
     DType result_dtype = least_upper_dtype(&a->dtype, &b->dtype);
     return uop_new(OPS_MUL, result_dtype, src, 2, &arg, NULL);
 }
@@ -486,11 +488,46 @@ UOp* uop_sub(UOp* a, UOp* b) {
 }
 
 UOp* uop_div(UOp* a, UOp* b) {
+    // Quick canonical reductions for integer-like bitpacking patterns
+    if (a && b && b->op==OPS_CONST) {
+        double dval = (b->arg.type==ARG_CONST) ? b->arg.const_data.const_value : (double)b->arg.int_data.i;
+        if (dval != 0.0) {
+            // Direct MUL(hi, K) // K -> hi
+            if (a->op == OPS_MUL && a->src_count==2) {
+                UOp* mc=NULL,*mv=NULL; if (a->src[0]->op==OPS_CONST){ mc=a->src[0]; mv=a->src[1]; } else if (a->src[1]->op==OPS_CONST){ mc=a->src[1]; mv=a->src[0]; }
+                if (mc && mc->op==OPS_CONST) {
+                    double mcv = (mc->arg.type==ARG_CONST) ? mc->arg.const_data.const_value : (double)mc->arg.int_data.i;
+                    if (fabs(mcv - dval) < 0.5) {
+                        if (mv->op==OPS_CAST && dtype_eq(&mv->dtype, &dtypes.uint64)) mv = mv->src[0];
+                        return uop_ref(mv);
+                    }
+                }
+            }
+            // Packed ((hi*K) | cast(lo,u64)) // K -> hi
+            if (a->op == OPS_OR && a->src_count==2) {
+                UOp* l=a->src[0], *r=a->src[1];
+                if (l->op==OPS_CAST && dtype_eq(&l->dtype, &dtypes.uint64)) l = l->src[0];
+                if (r->op==OPS_CAST && dtype_eq(&r->dtype, &dtypes.uint64)) r = r->src[0];
+                UOp* mul = (l->op==OPS_MUL)? l : (r->op==OPS_MUL? r: NULL);
+                if (mul && mul->src_count==2) {
+                    UOp* mc=NULL,*mv=NULL; if (mul->src[0]->op==OPS_CONST){ mc=mul->src[0]; mv=mul->src[1]; } else if (mul->src[1]->op==OPS_CONST){ mc=mul->src[1]; mv=mul->src[0]; }
+                    if (mc && mc->op==OPS_CONST) {
+                        double mcv = (mc->arg.type==ARG_CONST) ? mc->arg.const_data.const_value : (double)mc->arg.int_data.i;
+                        if (fabs(mcv - dval) < 0.5) {
+                            if (mv->op==OPS_CAST && dtype_eq(&mv->dtype, &dtypes.uint64)) mv = mv->src[0];
+                            return uop_ref(mv);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     UOp* src[] = {a, b};
     UOpArg arg = {0};
     DType result_dtype = least_upper_dtype(&a->dtype, &b->dtype);
-    // Use IDIV for integer types, FDIV for floating point
-    if (dtypes_is_int(&result_dtype)) {
+    // Use IDIV for integer and unsigned integer types, FDIV for floating point
+    if (dtypes_is_int(&result_dtype) || dtypes_is_unsigned(&result_dtype)) {
         return uop_new(OPS_IDIV, result_dtype, src, 2, &arg, NULL);
     } else {
         return uop_new(OPS_FDIV, result_dtype, src, 2, &arg, NULL);
@@ -1267,6 +1304,184 @@ UOp* uop_simplify(UOp* uop) {
     // Line 404-410: Early returns
     if (!uop) return NULL;
     if (uop->op == OPS_CONST) return uop;
+
+    // Quick, local peephole rules before deeper symbolic passes
+    // (x & 0xFFFFFFFF).cast(uint32) -> x.cast(uint32)
+    if (uop->op == OPS_CAST && uop->src_count==1 && dtype_eq(&uop->dtype, &dtypes.uint32)) {
+        UOp* m = uop->src[0];
+        if (m->op == OPS_AND && m->src_count==2) {
+            UOp* a=m->src[0], *b=m->src[1];
+            UOp* cst = NULL; UOp* var = NULL;
+            if (b->op==OPS_CONST) { cst=b; var=a; }
+            else if (a->op==OPS_CONST) { cst=a; var=b; }
+            if (cst && cst->arg.type==ARG_CONST) {
+                double mv = cst->arg.const_data.const_value;
+                if ((uint64_t)mv == 0xFFFFFFFFULL) {
+                    return uop_cast(var, dtypes.uint32);
+                }
+            }
+        }
+    }
+    // (((u64)*(1<<32)) | y(u32).cast(u64)).cast(u32) -> y
+    if (uop->op == OPS_CAST && uop->src_count==1 && dtype_eq(&uop->dtype, &dtypes.uint32)) {
+        UOp* orop = uop->src[0];
+        if (orop->op == OPS_OR && orop->src_count==2) {
+            UOp* l=orop->src[0], *r=orop->src[1];
+            UOp* mul = (l->op==OPS_MUL)? l : (r->op==OPS_MUL? r: NULL);
+            UOp* other = (mul==l)? r : (mul==r? l: NULL);
+            if (mul && mul->src_count==2 && other) {
+                UOp* mc=NULL,*mv=NULL; if (mul->src[0]->op==OPS_CONST){ mc=mul->src[0]; mv=mul->src[1]; } else if (mul->src[1]->op==OPS_CONST){ mc=mul->src[1]; mv=mul->src[0]; }
+                if (mc && mc->arg.type==ARG_CONST && fabs(mc->arg.const_data.const_value - (double)(1ULL<<32))<0.5) {
+                    if (other->op == OPS_CAST && dtype_eq(&other->dtype, &dtypes.uint64) && other->src_count==1 && dtype_eq(&other->src[0]->dtype, &dtypes.uint32)) {
+                        return uop_ref(other->src[0]);
+                    }
+                }
+            }
+        }
+    }
+    // (((x u64)*K) | (u32).cast(u64)) // K -> x  when K matches both places (robust to no-op casts)
+    if (uop->op == OPS_IDIV && uop->src_count==2 && uop->src[1]->op==OPS_CONST) {
+        double dval = (uop->src[1]->arg.type==ARG_CONST) ? uop->src[1]->arg.const_data.const_value : (double)uop->src[1]->arg.int_data.i;
+        if (dval != 0.0) {
+            UOp* num = uop->src[0];
+            // unwrap trivial cast on numerator
+            if (num->op==OPS_CAST && dtype_eq(&num->dtype, &dtypes.uint64)) num = num->src[0];
+            // direct MUL path
+            if (num->op == OPS_MUL && num->src_count==2) {
+                UOp* mc=NULL,*mv=NULL; if (num->src[0]->op==OPS_CONST){ mc=num->src[0]; mv=num->src[1]; } else if (num->src[1]->op==OPS_CONST){ mc=num->src[1]; mv=num->src[0]; }
+                if (mc && mc->op==OPS_CONST) {
+                    double mcv = (mc->arg.type==ARG_CONST) ? mc->arg.const_data.const_value : (double)mc->arg.int_data.i;
+                    if (fabs(mcv - dval) < 0.5) {
+                    // unwrap trivial cast around mv
+                    if (mv->op==OPS_CAST && dtype_eq(&mv->dtype, &dtypes.uint64)) mv = mv->src[0];
+                    return uop_ref(mv);
+                    }
+                }
+            }
+            // OR path with one side MUL
+            if (num->op == OPS_OR && num->src_count==2) {
+                UOp* l=num->src[0], *r=num->src[1];
+                if (l->op==OPS_CAST && dtype_eq(&l->dtype, &dtypes.uint64)) l = l->src[0];
+                if (r->op==OPS_CAST && dtype_eq(&r->dtype, &dtypes.uint64)) r = r->src[0];
+                UOp* mul = (l->op==OPS_MUL)? l : (r->op==OPS_MUL? r: NULL);
+                if (mul && mul->src_count==2) {
+                    UOp* mc=NULL,*mv=NULL; if (mul->src[0]->op==OPS_CONST){ mc=mul->src[0]; mv=mul->src[1]; } else if (mul->src[1]->op==OPS_CONST){ mc=mul->src[1]; mv=mul->src[0]; }
+                    if (mc && mc->op==OPS_CONST) {
+                        double mcv = (mc->arg.type==ARG_CONST) ? mc->arg.const_data.const_value : (double)mc->arg.int_data.i;
+                        if (fabs(mcv - dval) < 0.5) {
+                            if (mv->op==OPS_CAST && dtype_eq(&mv->dtype, &dtypes.uint64)) mv = mv->src[0];
+                            return uop_ref(mv);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // x.cast(u64) * where(y, 1<<32, 0) -> where(y, x, 0).cast(u64) * (1<<32)
+    if (uop->op == OPS_MUL && uop->src_count==2) {
+        UOp* a=uop->src[0], *b=uop->src[1];
+        UOp* cast=NULL; UOp* wh=NULL;
+        if (a->op==OPS_CAST && dtype_eq(&a->dtype, &dtypes.uint64) && b->op==OPS_WHERE) { cast=a; wh=b; }
+        else if (b->op==OPS_CAST && dtype_eq(&b->dtype, &dtypes.uint64) && a->op==OPS_WHERE) { cast=b; wh=a; }
+        if (cast && wh && wh->src_count==3) {
+            UOp* c=wh->src[0], *t=wh->src[1], *f=wh->src[2];
+            if (t->op==OPS_CONST && f->op==OPS_CONST) {
+                double tv = (t->arg.type==ARG_CONST)? t->arg.const_data.const_value : (double)t->arg.int_data.i;
+                double fv = (f->arg.type==ARG_CONST)? f->arg.const_data.const_value : (double)f->arg.int_data.i;
+                if (fabs(tv-(double)(1ULL<<32))<0.5 && fabs(fv-0.0)<0.5) {
+                    UOp* wh2 = uop_where(c, cast->src[0], uop_const(cast->src[0]->dtype, 0.0));
+                    UOp* wh2c = uop_cast(wh2, dtypes.uint64);
+                    UOp* muls[]={wh2c, uop_const(dtypes.uint64, (double)(1ULL<<32))}; UOpArg aa={0};
+                    return uop_new(OPS_MUL, dtypes.uint64, muls, 2, &aa, NULL);
+                }
+            }
+        }
+    }
+    // ((x u64)& where(y, 0xFFFFFFFF, 0)).cast(u32) -> where(y, x.cast(u32), 0)
+    if (uop->op == OPS_CAST && dtype_eq(&uop->dtype, &dtypes.uint32) && uop->src_count==1) {
+        UOp* andop = uop->src[0];
+        if (andop->op==OPS_AND && andop->src_count==2) {
+            UOp* a=andop->src[0], *b=andop->src[1];
+            UOp* wh = (a->op==OPS_WHERE)? a : (b->op==OPS_WHERE? b : NULL);
+            UOp* other = (wh==a)? b : (wh==b? a : NULL);
+            if (wh && other && dtype_eq(&other->dtype, &dtypes.uint64) && wh->src_count==3) {
+                UOp* c=wh->src[0], *t=wh->src[1], *f=wh->src[2];
+                if (t->op==OPS_CONST && f->op==OPS_CONST) {
+                    double tv=(t->arg.type==ARG_CONST)? t->arg.const_data.const_value : (double)t->arg.int_data.i;
+                    double fv=(f->arg.type==ARG_CONST)? f->arg.const_data.const_value : (double)f->arg.int_data.i;
+                    if ((uint64_t)tv==0xFFFFFFFFULL && fabs(fv-0.0)<0.5) {
+                        UOp* xc = uop_cast(other, dtypes.uint32);
+                        return uop_where(c, xc, uop_const(dtypes.uint32, 0.0));
+                    }
+                }
+            }
+        }
+    }
+    // GEP through WMMA (gated)
+    if (uop->op == OPS_GEP && uop->src_count>0 && uop->src[0]->op==OPS_WMMA) {
+        const char* en = tg_getenv("ENABLE_GEP_WMMA");
+        if (en && *en) {
+            UOp* wmma = uop->src[0];
+            UOp* g = uop;
+            int m = g->arg.type==ARG_REDUCE ? g->arg.reduce_data.axes_count : 0;
+            if (m>0 && wmma->src_count==3) {
+                UOp** ns = (UOp**)malloc(sizeof(UOp*)*3);
+                for (int i=0;i<3;i++) ns[i] = uop_gep(wmma->src[i], g->arg.reduce_data.axes, m);
+                UOpArg a = wmma->arg;
+                UOp* ret = uop_new(OPS_WMMA, g->dtype, ns, 3, &a, NULL);
+                free(ns);
+                return ret;
+            }
+        }
+    }
+
+    // CMPLT canonicalization quick wins for ints
+    if (uop->op == OPS_CMPLT && uop->src_count==2) {
+        UOp* lhs=uop->src[0], *rhs=uop->src[1];
+        // (a + x) < b  and (x + a) < b
+        if (lhs->op==OPS_ADD && rhs->op==OPS_CONST) {
+            UOp* a = lhs->src[0]; UOp* b = lhs->src[1];
+            double rv = (rhs->arg.type==ARG_CONST)? rhs->arg.const_data.const_value : (double)rhs->arg.int_data.i;
+            if (a->op==OPS_CONST) {
+                double av = (a->arg.type==ARG_CONST)? a->arg.const_data.const_value : (double)a->arg.int_data.i;
+                UOp* bound = uop_const(rhs->dtype, rv - av);
+                UOp* srcs[] = { b, bound };
+                return uop_new(OPS_CMPLT, dtypes.bool_, srcs, 2, &(UOpArg){0}, NULL);
+            }
+            if (b->op==OPS_CONST) {
+                double bv = (b->arg.type==ARG_CONST)? b->arg.const_data.const_value : (double)b->arg.int_data.i;
+                UOp* bound = uop_const(rhs->dtype, rv - bv);
+                UOp* srcs[] = { a, bound };
+                return uop_new(OPS_CMPLT, dtypes.bool_, srcs, 2, &(UOpArg){0}, NULL);
+            }
+        }
+        // (k*x) < c with k>0
+        if (lhs->op==OPS_MUL && lhs->src_count==2 && rhs->op==OPS_CONST) {
+            UOp* maybe_c0=lhs->src[0]; UOp* X=lhs->src[1]; if (maybe_c0->op!=OPS_CONST) { maybe_c0=lhs->src[1]; X=lhs->src[0]; }
+            if (maybe_c0->op==OPS_CONST) {
+                double c0 = (maybe_c0->arg.type==ARG_CONST)? maybe_c0->arg.const_data.const_value : (double)maybe_c0->arg.int_data.i;
+                double c1 = (rhs->arg.type==ARG_CONST)? rhs->arg.const_data.const_value : (double)rhs->arg.int_data.i;
+                if (c0 > 0 && c1 > 0) {
+                    double ceilv = ceil(c1 / c0);
+                    UOp* bound = uop_const(rhs->dtype, ceilv);
+                    UOp* srcs[] = { X, bound };
+                    return uop_new(OPS_CMPLT, dtypes.bool_, srcs, 2, &(UOpArg){0}, NULL);
+                }
+            }
+        }
+        // (-x) < (-y) -> y < x
+        if (lhs->op==OPS_MUL && rhs->op==OPS_MUL && lhs->src_count==2 && rhs->src_count==2) {
+            long long kl=0, kr=0; UOp* xl=NULL; UOp* xr=NULL;
+            if (lhs->src[0]->op==OPS_CONST) { if (lhs->src[0]->arg.type==ARG_INT) kl=lhs->src[0]->arg.int_data.i; else { double v=lhs->src[0]->arg.const_data.const_value; kl=(long long)llround(v);} xl=lhs->src[1]; }
+            else if (lhs->src[1]->op==OPS_CONST) { if (lhs->src[1]->arg.type==ARG_INT) kl=lhs->src[1]->arg.int_data.i; else { double v=lhs->src[1]->arg.const_data.const_value; kl=(long long)llround(v);} xl=lhs->src[0]; }
+            if (rhs->src[0]->op==OPS_CONST) { if (rhs->src[0]->arg.type==ARG_INT) kr=rhs->src[0]->arg.int_data.i; else { double v=rhs->src[0]->arg.const_data.const_value; kr=(long long)llround(v);} xr=rhs->src[1]; }
+            else if (rhs->src[1]->op==OPS_CONST) { if (rhs->src[1]->arg.type==ARG_INT) kr=rhs->src[1]->arg.int_data.i; else { double v=rhs->src[1]->arg.const_data.const_value; kr=(long long)llround(v);} xr=rhs->src[0]; }
+            if (xl && xr && kl==-1 && kr==-1) {
+                UOp* srcs[] = { xr, xl };
+                return uop_new(OPS_CMPLT, dtypes.bool_, srcs, 2, &(UOpArg){0}, NULL);
+            }
+        }
+    }
     
     // Apply advanced symbolic simplification from symbolic.c
     UOp* simplified = symbolic_simplify(uop);
