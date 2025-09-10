@@ -23,7 +23,8 @@ int64_t tg_cmod(int64_t x, int64_t y);
 /* Bit Operations */
 uint32_t tg_lo32(uint64_t x);
 uint32_t tg_hi32(uint64_t x);
-void tg_data64(uint64_t data, uint32_t *lo, uint32_t *hi);
+void tg_data64(uint64_t data, uint32_t *hi, uint32_t *lo);
+void tg_data64_le(uint64_t data, uint32_t *lo, uint32_t *hi);
 uint64_t tg_getbits(uint64_t value, int start, int end);
 
 /* String Utilities */

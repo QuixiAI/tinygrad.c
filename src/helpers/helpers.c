@@ -64,7 +64,12 @@ uint32_t tg_hi32(uint64_t x) {
   return (uint32_t)(x >> 32);
 }
 
-void tg_data64(uint64_t data, uint32_t *lo, uint32_t *hi) {
+void tg_data64(uint64_t data, uint32_t *hi, uint32_t *lo) {
+  *hi = tg_hi32(data);
+  *lo = tg_lo32(data);
+}
+
+void tg_data64_le(uint64_t data, uint32_t *lo, uint32_t *hi) {
   *lo = tg_lo32(data);
   *hi = tg_hi32(data);
 }
@@ -89,12 +94,12 @@ char* tg_colored(const char *st, const char *color) {
 
   if (color_index == -1) return strdup(st);
 
-  int background = (color[0] >= 'A' && color[0] <= 'Z') ? 10 : 0;
+  bool is_upper = (color[0] >= 'A' && color[0] <= 'Z');
   int color_code = 30 + color_index;
-  if (color[0] >= 'A' && color[0] <= 'Z') color_code += 60;
+  if (is_upper) color_code += 60; // Bright colors
 
   char *result = malloc(strlen(st) + 16); // Space for ANSI codes
-  sprintf(result, "\033[%dm%s\033[0m", background + color_code, st);
+  sprintf(result, "\033[%dm%s\033[0m", color_code, st);
   return result;
 }
 
@@ -139,29 +144,58 @@ char* tg_word_wrap(const char *x, int wrap) {
     return strdup(x);
   }
 
-  char *result = NULL;
-  size_t result_size = 0;
-  char *line_saveptr = NULL;
-  char *line = strtok_r(strdup(stripped), "\n", &line_saveptr);
-
-  while (line) {
-    char *wrapped_line = tg_word_wrap_single_line(line, wrap);
-    size_t wrapped_len = strlen(wrapped_line);
-
-    result = realloc(result, result_size + wrapped_len + 2); // +2 for \n and \0
-    if (result_size > 0) {
-      result[result_size - 1] = '\n';
-      strcpy(result + result_size, wrapped_line);
-    } else {
-      strcpy(result, wrapped_line);
+  // Check if input has multiple lines
+  if (strchr(x, '\n')) {
+    // Handle multiple lines: split, wrap each, rejoin
+    char *result = NULL;
+    size_t result_size = 0;
+    char *x_copy = strdup(x);
+    char *line = strtok(x_copy, "\n");
+    
+    while (line) {
+      char *wrapped_line = tg_word_wrap(line, wrap); // Recursive call
+      size_t wrapped_len = strlen(wrapped_line);
+      
+      result = realloc(result, result_size + wrapped_len + 2); // +2 for \n and \0
+      if (result_size > 0) {
+        strcpy(result + result_size, "\n");
+        strcpy(result + result_size + 1, wrapped_line);
+        result_size += wrapped_len + 1;
+      } else {
+        strcpy(result, wrapped_line);
+        result_size = wrapped_len;
+      }
+      
+      free(wrapped_line);
+      line = strtok(NULL, "\n");
     }
-    result_size += wrapped_len + 1;
-
-    free(wrapped_line);
-    line = strtok_r(NULL, "\n", &line_saveptr);
+    
+    result[result_size] = '\0';
+    free(x_copy);
+    free(stripped);
+    return result;
   }
 
-  free(line_saveptr && line ? line_saveptr - strlen(line) - 1 : NULL);
+  // Single line: find wrap point and recurse
+  size_t i = 0;
+  size_t x_len = strlen(x);
+  while (i < x_len) {
+    char *temp_substr = strndup(x, i + 1);
+    size_t temp_len = tg_ansilen(temp_substr);
+    free(temp_substr);
+    if (temp_len > (size_t)wrap) break;
+    i++;
+  }
+  
+  char *first_part = strndup(x, i);
+  char *rest = tg_word_wrap(x + i, wrap);
+  
+  size_t total_len = strlen(first_part) + 1 + strlen(rest) + 1; // +1 for \n, +1 for \0
+  char *result = malloc(total_len);
+  sprintf(result, "%s\n%s", first_part, rest);
+  
+  free(first_part);
+  free(rest);
   free(stripped);
   return result;
 }
