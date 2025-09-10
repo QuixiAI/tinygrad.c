@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+// Helper predicate function for partition tests
+bool is_even(int64_t x) { return x % 2 == 0; }
+
 void test_easy_utils() {
 
   // Test tg_argfix_int64
@@ -149,6 +152,123 @@ void test_easy_utils() {
     // Simplified for now
     tg_suppress_result_t result = tg_suppress_finalizing(NULL, NULL, TG_SUPPRESS_ALL);
     assert(result.success == 1);
+  }
+
+}
+
+void test_medium_utils() {
+
+  // Test tg_string_dict and tg_merge_dicts
+  {
+    // Create test dictionaries
+    tg_string_dict_t *dict1 = tg_string_dict_create(5);
+    tg_string_dict_t *dict2 = tg_string_dict_create(5);
+    tg_string_dict_t *dict3 = tg_string_dict_create(5);
+
+    // Add some key-value pairs
+    dict1->pairs[0] = (tg_string_pair_t){strdup("key1"), strdup("value1")};
+    dict1->pairs[1] = (tg_string_pair_t){strdup("key2"), strdup("value2")};
+    dict1->len = 2;
+
+    dict2->pairs[0] = (tg_string_pair_t){strdup("key3"), strdup("value3")};
+    dict2->pairs[1] = (tg_string_pair_t){strdup("key1"), strdup("value1")}; // Same as dict1
+    dict2->len = 2;
+
+    dict3->pairs[0] = (tg_string_pair_t){strdup("key1"), strdup("different_value")}; // Conflict
+    dict3->len = 1;
+
+    // Test successful merge
+    tg_string_dict_t *dicts_ok[] = {dict1, dict2};
+    tg_merge_dicts_result_t result1 = tg_merge_dicts(dicts_ok, 2);
+    assert(result1.success == true);
+    assert(result1.result->len == 3); // key1, key2, key3 (key1 appears in both but same value)
+    tg_string_dict_free(result1.result);
+
+    // Test conflicting merge
+    tg_string_dict_t *dicts_conflict[] = {dict1, dict3};
+    tg_merge_dicts_result_t result2 = tg_merge_dicts(dicts_conflict, 2);
+    assert(result2.success == false);
+    assert(result2.error_msg != NULL);
+    free(result2.error_msg);
+
+    tg_string_dict_free(dict1);
+    tg_string_dict_free(dict2);
+    tg_string_dict_free(dict3);
+  }
+
+  // Test tg_partition_int64
+  {
+    int64_t test_arr[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+
+    tg_partition_int64_result_t result = tg_partition_int64(test_arr, 10, is_even);
+
+    // Should have 5 even numbers (2,4,6,8,10) and 5 odd numbers (1,3,5,7,9)
+    assert(result.true_len == 5);
+    assert(result.false_len == 5);
+
+    // Check some values
+    assert(result.true_items[0] == 2);
+    assert(result.true_items[1] == 4);
+    assert(result.false_items[0] == 1);
+    assert(result.false_items[1] == 3);
+
+    free(result.true_items);
+    free(result.false_items);
+  }
+
+  // Test tg_get_child_string_dict
+  {
+    tg_string_dict_t *dict = tg_string_dict_create(3);
+    dict->pairs[0] = (tg_string_pair_t){strdup("name"), strdup("John")};
+    dict->pairs[1] = (tg_string_pair_t){strdup("age"), strdup("30")};
+    dict->pairs[2] = (tg_string_pair_t){strdup("city"), strdup("New York")};
+    dict->len = 3;
+
+    // Test successful lookup
+    tg_get_child_result_t result1 = tg_get_child_string_dict(dict, "name");
+    assert(result1.success == true);
+    assert(strcmp(result1.str_value, "John") == 0);
+    free(result1.str_value);
+
+    // Test failed lookup
+    tg_get_child_result_t result2 = tg_get_child_string_dict(dict, "nonexistent");
+    assert(result2.success == false);
+    assert(result2.error_msg != NULL);
+    free(result2.error_msg);
+
+    tg_string_dict_free(dict);
+  }
+
+  // Test tg_flatten_nested_int64
+  {
+    int64_t arr1[] = {1, 2, 3};
+    int64_t arr2[] = {4, 5};
+    int64_t arr3[] = {6, 7, 8, 9};
+
+    const int64_t *arrays[] = {arr1, arr2, arr3};
+    size_t lens[] = {3, 2, 4};
+
+    size_t out_len;
+    int64_t *flattened = tg_flatten_nested_int64(arrays, lens, 3, &out_len);
+
+    assert(out_len == 9);
+    assert(flattened[0] == 1 && flattened[1] == 2 && flattened[2] == 3);
+    assert(flattened[3] == 4 && flattened[4] == 5);
+    assert(flattened[5] == 6 && flattened[6] == 7 && flattened[7] == 8 && flattened[8] == 9);
+
+    free(flattened);
+  }
+
+  // Test tg_fully_flatten_int64
+  {
+    int64_t test_arr[] = {1, 2, 3, 4, 5};
+    tg_fully_flatten_result_t result = tg_fully_flatten_int64(test_arr, 5);
+
+    assert(result.success == true);
+    assert(result.len == 5);
+    assert(result.data[0] == 1 && result.data[4] == 5);
+
+    free(result.data);
   }
 
 }
@@ -329,6 +449,7 @@ int main() {
   printf("Running helper function tests...\n");
 
   test_easy_utils();
+  test_medium_utils();
   test_math_utils();
   test_bit_operations();
   test_string_utils();

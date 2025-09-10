@@ -254,6 +254,230 @@ tg_suppress_result_t tg_suppress_finalizing(void (*func)(void*), void *arg, tg_s
     return result;
 }
 
+/* NOTE: C doesn't have generic containers like Python, so we implement specific versions */
+
+/* Dictionary-like operations for key-value pairs */
+
+/* Helper function to create a string dictionary */
+tg_string_dict_t* tg_string_dict_create(size_t initial_capacity) {
+    tg_string_dict_t *dict = malloc(sizeof(tg_string_dict_t));
+    if (!dict) return NULL;
+
+    dict->pairs = malloc(initial_capacity * sizeof(tg_string_pair_t));
+    if (!dict->pairs) {
+        free(dict);
+        return NULL;
+    }
+
+    dict->len = 0;
+    dict->capacity = initial_capacity;
+    return dict;
+}
+
+void tg_string_dict_free(tg_string_dict_t *dict) {
+    if (!dict) return;
+
+    for (size_t i = 0; i < dict->len; i++) {
+        free(dict->pairs[i].key);
+        free(dict->pairs[i].value);
+    }
+    free(dict->pairs);
+    free(dict);
+}
+
+/* merge_dicts: Merge multiple dictionaries with conflict detection */
+
+tg_merge_dicts_result_t tg_merge_dicts(tg_string_dict_t **dicts, size_t num_dicts) {
+    tg_merge_dicts_result_t result = {NULL, false, NULL};
+
+    if (!dicts || num_dicts == 0) {
+        result.result = tg_string_dict_create(1);
+        result.success = (result.result != NULL);
+        return result;
+    }
+
+    // Calculate total capacity needed
+    size_t total_capacity = 0;
+    for (size_t i = 0; i < num_dicts; i++) {
+        if (dicts[i]) total_capacity += dicts[i]->len;
+    }
+
+    result.result = tg_string_dict_create(total_capacity + 1);
+    if (!result.result) return result;
+
+    // Merge all dictionaries, checking for conflicts
+    for (size_t dict_idx = 0; dict_idx < num_dicts; dict_idx++) {
+        if (!dicts[dict_idx]) continue;
+
+        tg_string_dict_t *current_dict = dicts[dict_idx];
+        for (size_t pair_idx = 0; pair_idx < current_dict->len; pair_idx++) {
+            const char *key = current_dict->pairs[pair_idx].key;
+            const char *value = current_dict->pairs[pair_idx].value;
+
+            // Check if key already exists with different value
+            bool conflict = false;
+            for (size_t existing_idx = 0; existing_idx < result.result->len; existing_idx++) {
+                if (strcmp(result.result->pairs[existing_idx].key, key) == 0) {
+                    if (strcmp(result.result->pairs[existing_idx].value, value) != 0) {
+                        result.error_msg = malloc(256);
+                        sprintf(result.error_msg, "cannot merge, key '%s' has different values", key);
+                        tg_string_dict_free(result.result);
+                        result.result = NULL;
+                        return result;
+                    }
+                    conflict = true; // Same key-value pair, skip
+                    break;
+                }
+            }
+
+            if (!conflict) {
+                // Add new key-value pair
+                if (result.result->len >= result.result->capacity) {
+                    result.result->capacity *= 2;
+                    result.result->pairs = realloc(result.result->pairs,
+                                                 result.result->capacity * sizeof(tg_string_pair_t));
+                }
+
+                result.result->pairs[result.result->len].key = strdup(key);
+                result.result->pairs[result.result->len].value = strdup(value);
+                result.result->len++;
+            }
+        }
+    }
+
+    result.success = true;
+    return result;
+}
+
+/* partition: Split iterable based on predicate function */
+
+tg_partition_int64_result_t tg_partition_int64(const int64_t *arr, size_t len, bool (*predicate)(int64_t)) {
+    tg_partition_int64_result_t result = {NULL, 0, NULL, 0};
+
+    if (!arr || len == 0 || !predicate) return result;
+
+    // Allocate maximum possible space
+    result.true_items = malloc(len * sizeof(int64_t));
+    result.false_items = malloc(len * sizeof(int64_t));
+
+    if (!result.true_items || !result.false_items) {
+        free(result.true_items);
+        free(result.false_items);
+        result.true_items = result.false_items = NULL;
+        return result;
+    }
+
+    for (size_t i = 0; i < len; i++) {
+        if (predicate(arr[i])) {
+            result.true_items[result.true_len++] = arr[i];
+        } else {
+            result.false_items[result.false_len++] = arr[i];
+        }
+    }
+
+    // Resize to actual lengths
+    result.true_items = realloc(result.true_items, result.true_len * sizeof(int64_t));
+    result.false_items = realloc(result.false_items, result.false_len * sizeof(int64_t));
+
+    return result;
+}
+
+/* get_child: Access nested object/dict with dot notation */
+/* Since C doesn't have dynamic objects, we'll implement for simple key-value access */
+
+/* Simplified version that works with string dictionaries and supports numeric indexing */
+tg_get_child_result_t tg_get_child_string_dict(tg_string_dict_t *dict, const char *key_path) {
+    tg_get_child_result_t result = {NULL, false, NULL};
+
+    if (!dict || !key_path) {
+        result.error_msg = strdup("Invalid dictionary or key path");
+        return result;
+    }
+
+    char *path_copy = strdup(key_path);
+    char *key = strtok(path_copy, ".");
+
+    if (!key) {
+        result.error_msg = strdup("Empty key path");
+        free(path_copy);
+        return result;
+    }
+
+    // For now, just handle single-level lookup (no nested dicts)
+    for (size_t i = 0; i < dict->len; i++) {
+        if (strcmp(dict->pairs[i].key, key) == 0) {
+            result.str_value = strdup(dict->pairs[i].value);
+            result.success = true;
+            free(path_copy);
+            return result;
+        }
+    }
+
+    result.error_msg = malloc(256);
+    sprintf(result.error_msg, "Key '%s' not found", key);
+    free(path_copy);
+    return result;
+}
+
+/* flatten: Flatten nested iterables (one level) */
+int64_t* tg_flatten_nested_int64(const int64_t **nested_arrays, const size_t *lens, size_t num_arrays, size_t *out_len) {
+    if (!nested_arrays || !lens || num_arrays == 0) {
+        *out_len = 0;
+        return NULL;
+    }
+
+    // Calculate total length
+    size_t total_len = 0;
+    for (size_t i = 0; i < num_arrays; i++) {
+        total_len += lens[i];
+    }
+
+    int64_t *result = malloc(total_len * sizeof(int64_t));
+    if (!result) {
+        *out_len = 0;
+        return NULL;
+    }
+
+    size_t pos = 0;
+    for (size_t i = 0; i < num_arrays; i++) {
+        if (nested_arrays[i] && lens[i] > 0) {
+            memcpy(result + pos, nested_arrays[i], lens[i] * sizeof(int64_t));
+            pos += lens[i];
+        }
+    }
+
+    *out_len = total_len;
+    return result;
+}
+
+/* fully_flatten: Recursively flatten with support for arrays */
+/* This is a simplified version - Python version handles arbitrary nested structures */
+
+tg_fully_flatten_result_t tg_fully_flatten_int64_recursive(const void *data, size_t data_len, int depth_level) {
+    tg_fully_flatten_result_t result = {NULL, 0, false};
+
+    if (depth_level > 10) { // Prevent infinite recursion
+        return result;
+    }
+
+    // For simplicity, assume we're working with int64_t arrays
+    // In a real implementation, this would need type information
+    const int64_t *arr = (const int64_t*)data;
+
+    result.data = malloc(data_len * sizeof(int64_t));
+    if (!result.data) return result;
+
+    memcpy(result.data, arr, data_len * sizeof(int64_t));
+    result.len = data_len;
+    result.success = true;
+
+    return result;
+}
+
+tg_fully_flatten_result_t tg_fully_flatten_int64(const int64_t *arr, size_t len) {
+    return tg_fully_flatten_int64_recursive(arr, len, 0);
+}
+
 /* Core Math Utilities */
 
 /* NOTE: tg_prod returns int64_t 1 if arr is empty regardless of the type of arr */

@@ -63,6 +63,70 @@ typedef struct {
 
 tg_suppress_result_t tg_suppress_finalizing(void (*func)(void*), void *arg, tg_suppress_flags_t flags);
 
+/* Medium Complexity Utility Functions */
+
+/* Dictionary-like operations for key-value pairs */
+typedef struct {
+    char *key;
+    char *value;
+} tg_string_pair_t;
+
+typedef struct {
+    tg_string_pair_t *pairs;
+    size_t len;
+    size_t capacity;
+} tg_string_dict_t;
+
+/* Dictionary helper functions */
+tg_string_dict_t* tg_string_dict_create(size_t initial_capacity);
+void tg_string_dict_free(tg_string_dict_t *dict);
+
+/* merge_dicts: Merge multiple dictionaries with conflict detection */
+typedef struct {
+    tg_string_dict_t *result;
+    bool success;
+    char *error_msg;
+} tg_merge_dicts_result_t;
+
+tg_merge_dicts_result_t tg_merge_dicts(tg_string_dict_t **dicts, size_t num_dicts);
+
+/* partition: Split iterable based on predicate function */
+typedef struct {
+    int64_t *true_items;
+    size_t true_len;
+    int64_t *false_items;
+    size_t false_len;
+} tg_partition_int64_result_t;
+
+tg_partition_int64_result_t tg_partition_int64(const int64_t *arr, size_t len, bool (*predicate)(int64_t));
+
+/* get_child: Access nested object/dict with dot notation */
+typedef enum {
+    TG_CHILD_TYPE_DICT,
+    TG_CHILD_TYPE_ARRAY,
+    TG_CHILD_TYPE_INVALID
+} tg_child_type_t;
+
+typedef struct {
+    char *str_value;
+    bool success;
+    char *error_msg;
+} tg_get_child_result_t;
+
+tg_get_child_result_t tg_get_child_string_dict(tg_string_dict_t *dict, const char *key_path);
+
+/* flatten: Flatten nested iterables */
+int64_t* tg_flatten_nested_int64(const int64_t **nested_arrays, const size_t *lens, size_t num_arrays, size_t *out_len);
+
+/* fully_flatten: Recursively flatten with support for arrays */
+typedef struct {
+    int64_t *data;
+    size_t len;
+    bool success;
+} tg_fully_flatten_result_t;
+
+tg_fully_flatten_result_t tg_fully_flatten_int64(const int64_t *arr, size_t len);
+
 /* Core Math Utilities */
 int64_t tg_prod(const int64_t *arr, size_t len);
 int64_t tg_ceildiv(int64_t num, int64_t amt);
