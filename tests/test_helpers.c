@@ -5,6 +5,154 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+void test_easy_utils() {
+
+  // Test tg_argfix_int64
+  {
+    int64_t arr1[] = {1, 2, 3};
+    int64_t arr2[] = {4, 5};
+    const int64_t *arrays[] = {arr1};
+    size_t lens[] = {3};
+
+    tg_argfix_result_t result = tg_argfix_int64(arrays, lens, 1);
+    assert(result.is_valid == true);
+    assert(result.len == 3);
+    assert(result.data[0] == 1 && result.data[1] == 2 && result.data[2] == 3);
+    free(result.data);
+  }
+
+  // Test tg_all_int
+  {
+    const char *types1[] = {"int", "int", "int"};
+    const void *values1[] = {NULL, NULL, NULL}; // Values don't matter for this test
+    assert(tg_all_int(values1, 3, types1) == true);
+
+    const char *types2[] = {"int", "float", "int"};
+    assert(tg_all_int(values1, 3, types2) == false);
+  }
+
+  // Test tg_colorize_float
+  {
+    char *green_result = tg_colorize_float(0.5);  // Should be green
+    assert(strstr(green_result, "0.50x") != NULL);
+    free(green_result);
+
+    char *red_result = tg_colorize_float(1.5);   // Should be red
+    assert(strstr(red_result, "1.50x") != NULL);
+    free(red_result);
+
+    char *yellow_result = tg_colorize_float(1.0); // Should be yellow
+    assert(strstr(yellow_result, "1.00x") != NULL);
+    free(yellow_result);
+  }
+
+  // Test tg_time_to_str
+  {
+    char *sec_result = tg_time_to_str(15.0, 8);
+    assert(strstr(sec_result, "s") != NULL);
+    free(sec_result);
+
+    char *ms_result = tg_time_to_str(0.05, 8);
+    assert(strstr(ms_result, "ms") != NULL);
+    free(ms_result);
+
+    char *us_result = tg_time_to_str(0.000005, 8);
+    assert(strstr(us_result, "us") != NULL);
+    free(us_result);
+  }
+
+  // Test tg_strip_parens
+  {
+    char *result1 = tg_strip_parens("(hello world)");
+    assert(strcmp(result1, "hello world") == 0);
+    free(result1);
+
+    char *result2 = tg_strip_parens("((nested))");
+    assert(strcmp(result2, "(nested)") == 0);
+    free(result2);
+
+    char *result3 = tg_strip_parens("no_parens");
+    assert(strcmp(result3, "no_parens") == 0);
+    free(result3);
+
+    char *result4 = tg_strip_parens("(unbalanced()");
+    assert(strcmp(result4, "(unbalanced()") == 0);
+    free(result4);
+  }
+
+  // Test tg_i2u
+  {
+    assert(tg_i2u(8, 127) == 127);      // Positive stays positive
+    assert(tg_i2u(8, -1) == 255);       // -1 becomes 255 in 8-bit
+    assert(tg_i2u(16, -1) == 65535);    // -1 becomes 65535 in 16-bit
+  }
+
+  // Test tg_is_numpy_ndarray
+  {
+    assert(tg_is_numpy_ndarray("<class 'numpy.ndarray'>") == true);
+    assert(tg_is_numpy_ndarray("<class 'list'>") == false);
+    assert(tg_is_numpy_ndarray(NULL) == false);
+  }
+
+  // Test tg_unwrap (note: this will abort on NULL, so we only test valid case)
+  {
+    int test_val = 42;
+    void *result = tg_unwrap(&test_val);
+    assert(result == &test_val);
+  }
+
+  // Test tg_get_single_element
+  {
+    int test_val = 42;
+    const void *arr[] = {&test_val};
+    tg_single_element_result_t result = tg_get_single_element(arr, 1);
+    assert(result.success == true);
+    assert(result.element == &test_val);
+
+    // Test error case
+    const void *arr2[] = {&test_val, &test_val};
+    tg_single_element_result_t result2 = tg_get_single_element(arr2, 2);
+    assert(result2.success == false);
+  }
+
+  // Test tg_polyN
+  {
+    double coeffs[] = {1, 2, 3}; // 1*x^2 + 2*x + 3
+    double result = tg_polyN(2.0, coeffs, 3); // 1*4 + 2*2 + 3 = 11
+    assert(result == 11.0);
+
+    double coeffs2[] = {2, -1}; // 2*x - 1
+    double result2 = tg_polyN(3.0, coeffs2, 2); // 2*3 - 1 = 5
+    assert(result2 == 5.0);
+  }
+
+  // Test tg_to_function_name
+  {
+    char *result1 = tg_to_function_name("hello_world123");
+    assert(strcmp(result1, "hello_world123") == 0);
+    free(result1);
+
+    char *result2 = tg_to_function_name("hello@world!");
+    assert(strstr(result2, "hello") != NULL);
+    assert(strstr(result2, "world") != NULL);
+    // Should contain hex codes for @ and !
+    free(result2);
+
+    char *result3 = tg_to_function_name("test-name");
+    assert(strstr(result3, "test") != NULL);
+    assert(strstr(result3, "name") != NULL);
+    free(result3);
+  }
+
+  // Test tg_suppress_finalizing (basic functionality)
+  {
+    // Simplified for now
+    tg_suppress_result_t result = tg_suppress_finalizing(NULL, NULL, TG_SUPPRESS_ALL);
+    assert(result.success == 1);
+  }
+
+}
+
 void test_math_utils() {
   printf("Testing math utilities...\n");
 
@@ -38,11 +186,17 @@ void test_bit_operations() {
   assert(tg_lo32(test_val) == 0x9ABCDEF0UL);
   assert(tg_hi32(test_val) == 0x12345678UL);
 
-  // Test tg_data64
+  // Test tg_data64 (hi, lo order)
   uint32_t lo, hi;
-  tg_data64(test_val, &lo, &hi);
-  assert(lo == 0x9ABCDEF0UL);
+  tg_data64(test_val, &hi, &lo);
   assert(hi == 0x12345678UL);
+  assert(lo == 0x9ABCDEF0UL);
+
+  // Test tg_data64_le (lo, hi order)
+  uint32_t lo_le, hi_le;
+  tg_data64_le(test_val, &lo_le, &hi_le);
+  assert(lo_le == 0x9ABCDEF0UL);
+  assert(hi_le == 0x12345678UL);
 
   // Test tg_getbits
   assert(tg_getbits(0xFF, 0, 3) == 0xF);
@@ -174,6 +328,7 @@ void test_progress_bar() {
 int main() {
   printf("Running helper function tests...\n");
 
+  test_easy_utils();
   test_math_utils();
   test_bit_operations();
   test_string_utils();

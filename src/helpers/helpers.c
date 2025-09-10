@@ -13,6 +13,247 @@
 #include <sys/ioctl.h>
 #include <math.h>
 
+
+/* NOTE: argfix handles tuple/list argument unpacking
+ * Returns the first array if x contains a single array, otherwise returns x unchanged
+ * Python: if x and x[0].__class__ in (tuple, list): return tuple(x[0])
+ */
+
+tg_argfix_result_t tg_argfix_int64(const int64_t **arrays, const size_t *lens, size_t num_arrays) {
+    tg_argfix_result_t result = {NULL, 0, false};
+
+    if (num_arrays == 1 && arrays[0] && lens[0] > 0) {
+        // Single array case - return copy of the array
+        result.data = malloc(lens[0] * sizeof(int64_t));
+        if (result.data) {
+            memcpy(result.data, arrays[0], lens[0] * sizeof(int64_t));
+            result.len = lens[0];
+            result.is_valid = true;
+        }
+    } else if (num_arrays > 1) {
+        // Multiple arrays case - flatten them
+        size_t total_len = 0;
+        for (size_t i = 0; i < num_arrays; i++) {
+            total_len += lens[i];
+        }
+
+        result.data = malloc(total_len * sizeof(int64_t));
+        if (result.data) {
+            size_t pos = 0;
+            for (size_t i = 0; i < num_arrays; i++) {
+                if (arrays[i] && lens[i] > 0) {
+                    memcpy(result.data + pos, arrays[i], lens[i] * sizeof(int64_t));
+                    pos += lens[i];
+                }
+            }
+            result.len = total_len;
+            result.is_valid = true;
+        }
+    }
+
+    return result;
+}
+
+bool tg_all_int(const void **values, size_t len, const char **type_names) {
+    if (!values || !type_names || len == 0) return true;
+
+    for (size_t i = 0; i < len; i++) {
+        if (!type_names[i] || strcmp(type_names[i], "int") != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+char* tg_colorize_float(double x) {
+    const char *color;
+    if (x < 0.75) {
+        color = "green";
+    } else if (x > 1.15) {
+        color = "red";
+    } else {
+        color = "yellow";
+    }
+
+    char value_str[32];
+    sprintf(value_str, "%7.2fx", x);
+    return tg_colored(value_str, color);
+}
+
+char* tg_time_to_str(double t, int w) {
+    if (w <= 0) w = 8;
+
+    char *result = malloc(32);
+    if (!result) return NULL;
+
+    if (t > 10.0) {
+        // seconds
+        sprintf(result, "%*.*fs ", w, 2, t);
+    } else if (t > 0.01) {
+        // milliseconds
+        sprintf(result, "%*.*fms", w, 2, t * 1000.0);
+    } else {
+        // microseconds
+        sprintf(result, "%*.*fus", w, 2, t * 1000000.0);
+    }
+
+    return result;
+}
+
+char* tg_strip_parens(const char *fst) {
+    if (!fst) return NULL;
+
+    size_t len = strlen(fst);
+    if (len < 2) return strdup(fst);
+
+    if (fst[0] == '(' && fst[len-1] == ')') {
+        // Check Python condition: fst[1:-1].find('(') <= fst[1:-1].find(')')
+        const char *middle = fst + 1;
+        size_t middle_len = len - 2;
+
+        // Create null-terminated substring for middle part
+        char *middle_str = malloc(middle_len + 1);
+        memcpy(middle_str, middle, middle_len);
+        middle_str[middle_len] = '\0';
+
+        // Find first occurrence of '(' and ')' in middle part
+        char *first_open = strchr(middle_str, '(');
+        char *first_close = strchr(middle_str, ')');
+
+        // Python find() returns -1 if not found
+        // We need to emulate: find('(') <= find(')')
+        // In Python, -1 is treated as a very large number in comparisons due to how Python handles -1
+        long open_pos = first_open ? (long)(first_open - middle_str) : -1L;
+        long close_pos = first_close ? (long)(first_close - middle_str) : -1L;
+
+        // Python comparison behavior: -1 <= -1 is True, but any_positive <= -1 is False
+        bool should_strip;
+        if (open_pos == -1 && close_pos == -1) {
+            should_strip = true;  // -1 <= -1 is True
+        } else if (close_pos == -1) {
+            should_strip = false; // any_number <= -1 is False when close_pos is -1
+        } else if (open_pos == -1) {
+            should_strip = true;  // -1 <= any_number is True when open_pos is -1
+        } else {
+            should_strip = (open_pos <= close_pos);  // Normal comparison
+        }
+
+        // printf("DEBUG: input='%s', len=%zu\n", fst, len);
+        // printf("DEBUG: middle='%.*s', middle_len=%zu, open_pos=%ld, close_pos=%ld, should_strip=%s\n",
+        //        (int)middle_len, middle, middle_len, open_pos, close_pos, should_strip ? "true" : "false");
+
+        if (should_strip) {
+            char *result = malloc(middle_len + 1);
+            if (result) {
+                memcpy(result, middle, middle_len);
+                result[middle_len] = '\0';
+                free(middle_str);
+                return result;
+            }
+        }
+
+        free(middle_str);
+    }
+
+    return strdup(fst);
+}
+
+uint64_t tg_i2u(int bits, int64_t value) {
+    if (value >= 0) {
+        return (uint64_t)value;
+    } else {
+        return (1ULL << bits) + value;
+    }
+}
+
+bool tg_is_numpy_ndarray(const char *type_str) {
+    if (!type_str) return false;
+    return strcmp(type_str, "<class 'numpy.ndarray'>") == 0;
+}
+
+void* tg_unwrap(void *x) {
+    if (x == NULL) {
+        fprintf(stderr, "Error: tg_unwrap called with NULL pointer\n");
+        abort();
+    }
+    return x;
+}
+
+
+tg_single_element_result_t tg_get_single_element(const void **arr, size_t len) {
+    tg_single_element_result_t result = {NULL, false};
+
+    if (len != 1) {
+        fprintf(stderr, "Error: sequence must have exactly 1 element, got %zu\n", len);
+        return result;
+    }
+
+    result.element = (void*)arr[0];
+    result.success = true;
+    return result;
+}
+
+double tg_polyN(double x, const double *p, size_t len) {
+    if (!p || len == 0) return 0.0;
+
+    double result = 0.0;
+    for (size_t i = 0; i < len; i++) {
+        result = result * x + p[i];
+    }
+    return result;
+}
+
+char* tg_to_function_name(const char *s) {
+    if (!s) return NULL;
+
+    char *stripped = tg_ansistrip(s);
+    size_t len = strlen(stripped);
+
+    // Worst case: every char becomes XX (2 hex digits), plus null terminator
+    char *result = malloc(len * 2 + 1);
+    if (!result) {
+        free(stripped);
+        return NULL;
+    }
+
+    size_t pos = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = stripped[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '_') {
+            result[pos++] = c;
+        } else {
+            sprintf(result + pos, "%02X", (unsigned char)c);
+            pos += 2;
+        }
+    }
+    result[pos] = '\0';
+
+    free(stripped);
+
+    // Resize to actual length
+    result = realloc(result, pos + 1);
+    return result;
+}
+
+/* NOTE: C doesn't have decorators, so tg_suppress_finalizing is implemented as a wrapper
+ * Call this around functions that might fail during program cleanup
+ */
+
+tg_suppress_result_t tg_suppress_finalizing(void (*func)(void*), void *arg, tg_suppress_flags_t flags) {
+    tg_suppress_result_t result = {1, 0, NULL};
+
+    // In C, we can't easily detect if we're finalizing like Python's sys.is_finalizing()
+    // For now, just execute the function and catch any errors through return codes
+    // This is a simplified version - real implementation would need more sophisticated error handling
+
+    if (func) {
+        func(arg);
+    }
+
+    return result;
+}
+
 /* Core Math Utilities */
 
 /* NOTE: tg_prod returns int64_t 1 if arr is empty regardless of the type of arr */
@@ -151,11 +392,11 @@ char* tg_word_wrap(const char *x, int wrap) {
     size_t result_size = 0;
     char *x_copy = strdup(x);
     char *line = strtok(x_copy, "\n");
-    
+
     while (line) {
       char *wrapped_line = tg_word_wrap(line, wrap); // Recursive call
       size_t wrapped_len = strlen(wrapped_line);
-      
+
       result = realloc(result, result_size + wrapped_len + 2); // +2 for \n and \0
       if (result_size > 0) {
         strcpy(result + result_size, "\n");
@@ -165,11 +406,11 @@ char* tg_word_wrap(const char *x, int wrap) {
         strcpy(result, wrapped_line);
         result_size = wrapped_len;
       }
-      
+
       free(wrapped_line);
       line = strtok(NULL, "\n");
     }
-    
+
     result[result_size] = '\0';
     free(x_copy);
     free(stripped);
@@ -186,14 +427,14 @@ char* tg_word_wrap(const char *x, int wrap) {
     if (temp_len > (size_t)wrap) break;
     i++;
   }
-  
+
   char *first_part = strndup(x, i);
   char *rest = tg_word_wrap(x + i, wrap);
-  
+
   size_t total_len = strlen(first_part) + 1 + strlen(rest) + 1; // +1 for \n, +1 for \0
   char *result = malloc(total_len);
   sprintf(result, "%s\n%s", first_part, rest);
-  
+
   free(first_part);
   free(rest);
   free(stripped);

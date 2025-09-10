@@ -12,6 +12,57 @@
 extern "C" {
 #endif
 
+
+/* Argument handling */
+typedef struct {
+    int64_t *data;
+    size_t len;
+    bool is_valid;
+} tg_argfix_result_t;
+
+tg_argfix_result_t tg_argfix_int64(const int64_t **arrays, const size_t *lens, size_t num_arrays);
+
+/* Type checking */
+bool tg_all_int(const void **values, size_t len, const char **type_names);
+bool tg_is_numpy_ndarray(const char *type_str);
+
+/* String and formatting utilities */
+char* tg_colorize_float(double x);
+char* tg_time_to_str(double t, int w);
+char* tg_strip_parens(const char *fst);
+char* tg_to_function_name(const char *s);
+
+/* Numeric utilities */
+uint64_t tg_i2u(int bits, int64_t value);
+double tg_polyN(double x, const double *p, size_t len);
+
+/* Safety utilities */
+void* tg_unwrap(void *x);
+
+typedef struct {
+    void *element;
+    bool success;
+} tg_single_element_result_t;
+
+tg_single_element_result_t tg_get_single_element(const void **arr, size_t len);
+
+/* Error suppression utilities */
+typedef enum {
+    TG_SUPPRESS_NONE = 0,
+    TG_SUPPRESS_ATTRIBUTE_ERROR = 1,
+    TG_SUPPRESS_TYPE_ERROR = 2,
+    TG_SUPPRESS_IMPORT_ERROR = 4,
+    TG_SUPPRESS_ALL = 7
+} tg_suppress_flags_t;
+
+typedef struct {
+    int success;
+    int error_type;
+    char *error_msg;
+} tg_suppress_result_t;
+
+tg_suppress_result_t tg_suppress_finalizing(void (*func)(void*), void *arg, tg_suppress_flags_t flags);
+
 /* Core Math Utilities */
 int64_t tg_prod(const int64_t *arr, size_t len);
 int64_t tg_ceildiv(int64_t num, int64_t amt);
