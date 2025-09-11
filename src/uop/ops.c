@@ -10,6 +10,7 @@
 #include "uop/uop.h"
 #include "uop/mathtraits.h"  // This provides the math_ops symbol
 #include "shape/shapetracker.h"
+#include "uop/spec.h"
 #include "helpers/helpers.h"
 
 // Forward declaration for optional buffer map removal used in uop_free
@@ -103,6 +104,18 @@ UOp* uop_new(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void
             memcpy(uop->arg.reduce_data.axes, arg->reduce_data.axes,
                    arg->reduce_data.axes_count * sizeof(int));
         }
+        if (arg->type == ARG_TUPLE2 && arg->tuple2.count > 0) {
+            int n = arg->tuple2.count;
+            uop->arg.tuple2.count = n;
+            if (arg->tuple2.first) {
+                uop->arg.tuple2.first = (int*)malloc(n * sizeof(int));
+                memcpy(uop->arg.tuple2.first, arg->tuple2.first, n * sizeof(int));
+            }
+            if (arg->tuple2.second) {
+                uop->arg.tuple2.second = (int*)malloc(n * sizeof(int));
+                memcpy(uop->arg.tuple2.second, arg->tuple2.second, n * sizeof(int));
+            }
+        }
         if (op == OPS_PAD && arg->type == ARG_PAD_PARAMS && arg->pad_data.ndim > 0) {
             int n = arg->pad_data.ndim;
             uop->arg.pad_data.ndim = n;
@@ -124,6 +137,25 @@ UOp* uop_new(Ops op, DType dtype, UOp** src, size_t src_count, UOpArg* arg, void
             uop->arg.vconst_data.count = n;
             uop->arg.vconst_data.values = (double*)malloc(n * sizeof(double));
             memcpy(uop->arg.vconst_data.values, arg->vconst_data.values, n * sizeof(double));
+        }
+        if (arg->type == ARG_STRING && arg->str.s) {
+            uop->arg.str.s = strdup(arg->str.s);
+        }
+        if (arg->type == ARG_STRLIST && arg->strlist.count > 0 && arg->strlist.items) {
+            int n = arg->strlist.count;
+            uop->arg.strlist.count = n;
+            uop->arg.strlist.items = (char**)malloc((size_t)n * sizeof(char*));
+            for (int i=0;i<n;i++) uop->arg.strlist.items[i] = arg->strlist.items[i] ? strdup(arg->strlist.items[i]) : NULL;
+        }
+        if (arg->type == ARG_TUPLE_MIXED && arg->tmixed.count > 0 && arg->tmixed.items) {
+            int n = arg->tmixed.count;
+            uop->arg.tmixed.count = n;
+            uop->arg.tmixed.items = (struct MixedItem*)malloc((size_t)n * sizeof(struct MixedItem));
+            for (int i=0;i<n;i++) {
+                uop->arg.tmixed.items[i].tag = arg->tmixed.items[i].tag;
+                uop->arg.tmixed.items[i].ival = arg->tmixed.items[i].ival;
+                uop->arg.tmixed.items[i].uop = arg->tmixed.items[i].uop ? uop_ref(arg->tmixed.items[i].uop) : NULL;
+            }
         }
         // If a ShapeTracker was passed via arg (legacy), attach it to uop->st
         if (arg->type == ARG_SHAPE_TRACKER && arg->st_data.st) {
@@ -192,6 +224,21 @@ void uop_free(UOp* uop) {
         }
         if (uop->arg.type == ARG_VCONST && uop->arg.vconst_data.values) {
             free(uop->arg.vconst_data.values);
+        }
+        if (uop->arg.type == ARG_STRING && uop->arg.str.s) {
+            free(uop->arg.str.s);
+        }
+        if (uop->arg.type == ARG_STRLIST && uop->arg.strlist.items) {
+            for (int i=0;i<uop->arg.strlist.count;i++) if (uop->arg.strlist.items[i]) free(uop->arg.strlist.items[i]);
+            free(uop->arg.strlist.items);
+        }
+        if (uop->arg.type == ARG_TUPLE_MIXED && uop->arg.tmixed.items) {
+            for (int i=0;i<uop->arg.tmixed.count;i++) if (uop->arg.tmixed.items[i].uop) uop_unref(uop->arg.tmixed.items[i].uop);
+            free(uop->arg.tmixed.items);
+        }
+        if (uop->arg.type == ARG_TUPLE2) {
+            if (uop->arg.tuple2.first) free(uop->arg.tuple2.first);
+            if (uop->arg.tuple2.second) free(uop->arg.tuple2.second);
         }
         if (uop->op == OPS_PAD && uop->arg.type == ARG_PAD_PARAMS) {
             free(uop->arg.pad_data.before);
@@ -445,6 +492,8 @@ UOp* uop_define_global(DType dtype, int idx) {
     // Attach st shape from pointer size if >0
     const PtrDType* pd = (const PtrDType*)&dtype; int sz = pd->size;
     if (sz > 0) { int32_t shp[1] = { (int32_t)sz }; u->st = shapetracker_from_shape(shp, 1); }
+    // Attach spec dtype metadata for parity
+    spec_attach_define_meta(u, ADDRSPACE_GLOBAL);
     return u;
 }
 
@@ -453,6 +502,8 @@ UOp* uop_define_local(DType dtype, size_t size) {
     UOp* u = uop_new(OPS_DEFINE_LOCAL, dtype, NULL, 0, &arg, NULL);
     const PtrDType* pd = (const PtrDType*)&dtype; int sz = pd->size;
     if (sz > 0) { int32_t shp[1] = { (int32_t)sz }; u->st = shapetracker_from_shape(shp, 1); }
+    // Attach spec dtype metadata for parity
+    spec_attach_define_meta(u, ADDRSPACE_LOCAL);
     return u;
 }
 
@@ -461,6 +512,8 @@ UOp* uop_define_reg(DType dtype) {
     UOp* u = uop_new(OPS_DEFINE_REG, dtype, NULL, 0, &arg, NULL);
     const PtrDType* pd = (const PtrDType*)&dtype; int sz = pd->size;
     if (sz > 0) { int32_t shp[1] = { (int32_t)sz }; u->st = shapetracker_from_shape(shp, 1); }
+    // Attach spec dtype metadata for parity (REG)
+    spec_attach_define_meta(u, ADDRSPACE_REG);
     return u;
 }
 
@@ -678,6 +731,53 @@ UOp* uop_broadcast(UOp* a, int count) {
     UOpArg arg = {0};
     UOp* u = uop_new(OPS_VECTORIZE, dtype_vec(&a->dtype, count), src, (size_t)count, &arg, NULL);
     free(src);
+    return u;
+}
+
+// ---- Structured emitters that populate ARG_TUPLE2 ----
+UOp* uop_wmma(UOp* a, UOp* b, UOp* acc, const int* first, const int* second, int count) {
+    UOp* srcs[3] = {a, b, acc};
+    UOpArg arg = {.type = ARG_TUPLE2};
+    arg.tuple2.count = count;
+    // Allocate temporary arrays to be deep-copied by uop_new
+    int* f = NULL; int* s = NULL;
+    if (count > 0) {
+        if (first) { f = (int*)malloc((size_t)count * sizeof(int)); for (int i=0;i<count;i++) f[i] = first[i]; }
+        if (second){ s = (int*)malloc((size_t)count * sizeof(int)); for (int i=0;i<count;i++) s[i] = second[i]; }
+    }
+    arg.tuple2.first = f; arg.tuple2.second = s;
+    UOp* u = uop_new(OPS_WMMA, acc->dtype, srcs, 3, &arg, NULL);
+    if (f) free(f); if (s) free(s);
+    return u;
+}
+
+UOp* uop_contract(UOp* x, const int* first, const int* second, int count) {
+    UOp* srcs[1] = {x};
+    UOpArg arg = {.type = ARG_TUPLE2};
+    arg.tuple2.count = count;
+    int* f = NULL; int* s = NULL;
+    if (count > 0) {
+        if (first) { f = (int*)malloc((size_t)count * sizeof(int)); for (int i=0;i<count;i++) f[i] = first[i]; }
+        if (second){ s = (int*)malloc((size_t)count * sizeof(int)); for (int i=0;i<count;i++) s[i] = second[i]; }
+    }
+    arg.tuple2.first = f; arg.tuple2.second = s;
+    UOp* u = uop_new(OPS_CONTRACT, x->dtype, srcs, 1, &arg, NULL);
+    if (f) free(f); if (s) free(s);
+    return u;
+}
+
+UOp* uop_unroll(UOp* x, const int* first, const int* second, int count) {
+    UOp* srcs[1] = {x};
+    UOpArg arg = {.type = ARG_TUPLE2};
+    arg.tuple2.count = count;
+    int* f = NULL; int* s = NULL;
+    if (count > 0) {
+        if (first) { f = (int*)malloc((size_t)count * sizeof(int)); for (int i=0;i<count;i++) f[i] = first[i]; }
+        if (second){ s = (int*)malloc((size_t)count * sizeof(int)); for (int i=0;i<count;i++) s[i] = second[i]; }
+    }
+    arg.tuple2.first = f; arg.tuple2.second = s;
+    UOp* u = uop_new(OPS_UNROLL, x->dtype, srcs, 1, &arg, NULL);
+    if (f) free(f); if (s) free(s);
     return u;
 }
 
@@ -1198,6 +1298,32 @@ size_t uop_hash(UOp* uop) {
             if (uop->arg.shrink_data.end && n>0) h = hash_mix(h, hash_mem(uop->arg.shrink_data.end, sizeof(int32_t)*(size_t)n));
             h = hash_mix(h, (size_t)n);
             break; }
+        case ARG_TUPLE2: {
+            int n = uop->arg.tuple2.count;
+            h = hash_mix(h, (size_t)n);
+            if (uop->arg.tuple2.first && n>0) h = hash_mix(h, hash_mem(uop->arg.tuple2.first, sizeof(int)*(size_t)n));
+            if (uop->arg.tuple2.second && n>0) h = hash_mix(h, hash_mem(uop->arg.tuple2.second, sizeof(int)*(size_t)n));
+            break; }
+        case ARG_STRING: {
+            if (uop->arg.str.s) h = hash_mix(h, hash_mem(uop->arg.str.s, strlen(uop->arg.str.s)));
+            break; }
+        case ARG_STRLIST: {
+            int n = uop->arg.strlist.count;
+            h = hash_mix(h, (size_t)n);
+            for (int i=0;i<n;i++) {
+                if (uop->arg.strlist.items && uop->arg.strlist.items[i]) h = hash_mix(h, hash_mem(uop->arg.strlist.items[i], strlen(uop->arg.strlist.items[i])));
+            }
+            break; }
+        case ARG_TUPLE_MIXED: {
+            int n = uop->arg.tmixed.count;
+            h = hash_mix(h, (size_t)n);
+            for (int i=0;i<n;i++) {
+                struct MixedItem* it = &uop->arg.tmixed.items[i];
+                h = hash_mix(h, (size_t)it->tag);
+                if (it->tag == MIXED_INT) h = hash_mix(h, (size_t)it->ival);
+                else if (it->tag == MIXED_UOP) h = hash_mix(h, (size_t)it->uop);
+            }
+            break; }
         default: break;
     }
     // tag
@@ -1235,9 +1361,99 @@ bool uop_equals(UOp* a, UOp* b) {
             if (a->arg.shrink_data.ndim != b->arg.shrink_data.ndim) return false;
             for (int i=0;i<a->arg.shrink_data.ndim;i++) if (a->arg.shrink_data.start[i] != b->arg.shrink_data.start[i] || a->arg.shrink_data.end[i] != b->arg.shrink_data.end[i]) return false;
             break; }
+        case ARG_TUPLE2: {
+            if (a->arg.tuple2.count != b->arg.tuple2.count) return false;
+            int n = a->arg.tuple2.count;
+            for (int i=0;i<n;i++) {
+                int af = a->arg.tuple2.first ? a->arg.tuple2.first[i] : 0;
+                int bf = b->arg.tuple2.first ? b->arg.tuple2.first[i] : 0;
+                if (af != bf) return false;
+            }
+            for (int i=0;i<n;i++) {
+                int as = a->arg.tuple2.second ? a->arg.tuple2.second[i] : 0;
+                int bs = b->arg.tuple2.second ? b->arg.tuple2.second[i] : 0;
+                if (as != bs) return false;
+            }
+            break; }
+        case ARG_STRING: {
+            const char* as = a->arg.str.s ? a->arg.str.s : "";
+            const char* bs = b->arg.str.s ? b->arg.str.s : "";
+            if (strcmp(as, bs) != 0) return false;
+            break; }
+        case ARG_STRLIST: {
+            if (a->arg.strlist.count != b->arg.strlist.count) return false;
+            int n = a->arg.strlist.count;
+            for (int i=0;i<n;i++) {
+                const char* as = (a->arg.strlist.items && a->arg.strlist.items[i]) ? a->arg.strlist.items[i] : "";
+                const char* bs = (b->arg.strlist.items && b->arg.strlist.items[i]) ? b->arg.strlist.items[i] : "";
+                if (strcmp(as, bs) != 0) return false;
+            }
+            break; }
+        case ARG_TUPLE_MIXED: {
+            if (a->arg.tmixed.count != b->arg.tmixed.count) return false;
+            int n = a->arg.tmixed.count;
+            for (int i=0;i<n;i++) {
+                struct MixedItem* ai = &a->arg.tmixed.items[i];
+                struct MixedItem* bi = &b->arg.tmixed.items[i];
+                if (ai->tag != bi->tag) return false;
+                if (ai->tag == MIXED_INT) { if (ai->ival != bi->ival) return false; }
+                else if (ai->tag == MIXED_UOP) { if (ai->uop != bi->uop) return false; }
+            }
+            break; }
         default: break;
     }
     return true;
+}
+
+// DEVICE constructors
+UOp* uop_device_str(const char* dev) {
+    UOpArg arg = {.type = ARG_STRING};
+    arg.str.s = (char*)dev; // deep copy in uop_new
+    return uop_new(OPS_DEVICE, dtypes.void_, NULL, 0, &arg, NULL);
+}
+
+UOp* uop_device_tuple(const char* const* devs, int count) {
+    UOpArg arg = {.type = ARG_STRLIST};
+    arg.strlist.count = count;
+    if (count > 0) {
+        arg.strlist.items = (char**)malloc((size_t)count * sizeof(char*));
+        for (int i=0;i<count;i++) arg.strlist.items[i] = devs[i] ? strdup(devs[i]) : NULL;
+    }
+    UOp* u = uop_new(OPS_DEVICE, dtypes.void_, NULL, 0, &arg, NULL);
+    if (arg.strlist.items) { for (int i=0;i<count;i++) if (arg.strlist.items[i]) free(arg.strlist.items[i]); free(arg.strlist.items); }
+    return u;
+}
+
+UOp* uop_buffer_view(UOp* buffer, int tag0, long long ival0, UOp* u0,
+                     int tag1, long long ival1, UOp* u1) {
+    if (!buffer) return NULL;
+    UOp* srcs[1] = { buffer };
+    UOpArg arg = {.type = ARG_TUPLE_MIXED};
+    arg.tmixed.count = 2;
+    arg.tmixed.items = (struct MixedItem*)malloc(2 * sizeof(struct MixedItem));
+    arg.tmixed.items[0].tag = tag0;
+    arg.tmixed.items[0].ival = ival0;
+    arg.tmixed.items[0].uop = u0;
+    arg.tmixed.items[1].tag = tag1;
+    arg.tmixed.items[1].ival = ival1;
+    arg.tmixed.items[1].uop = u1;
+    UOp* u = uop_new(OPS_BUFFER_VIEW, dtypes.void_, srcs, 1, &arg, NULL);
+    // uop_new deep-copies and refs items; free our temp holders
+    free(arg.tmixed.items);
+    return u;
+}
+
+UOp* uop_buffer_view_ii(UOp* buffer, long long a0, long long a1) {
+    return uop_buffer_view(buffer, MIXED_INT, a0, NULL, MIXED_INT, a1, NULL);
+}
+UOp* uop_buffer_view_iU(UOp* buffer, long long a0, UOp* a1) {
+    return uop_buffer_view(buffer, MIXED_INT, a0, NULL, MIXED_UOP, 0, a1);
+}
+UOp* uop_buffer_view_Ui(UOp* buffer, UOp* a0, long long a1) {
+    return uop_buffer_view(buffer, MIXED_UOP, 0, a0, MIXED_INT, a1, NULL);
+}
+UOp* uop_buffer_view_UU(UOp* buffer, UOp* a0, UOp* a1) {
+    return uop_buffer_view(buffer, MIXED_UOP, 0, a0, MIXED_UOP, 0, a1);
 }
 
 // More aggressive constant folding for basic operations
@@ -2381,13 +2597,17 @@ UOp* uop_range(UOp* n, int idx) {
     arg.type = ARG_INT;
     arg.int_data.i = idx;
     UOp* src[] = {n};
-    return uop_new(OPS_RANGE, dtypes.int32, src, 1, &arg, NULL);
+    // Parity with Python: rng.dtype == n.dtype
+    DType dt = n ? n->dtype : dtypes.int32;
+    return uop_new(OPS_RANGE, dt, src, 1, &arg, NULL);
 }
 
 UOp* uop_buffer(int64_t* shape, size_t shape_count, DType dtype) {
     // Create a buffer UOp
     UOpArg arg = {0};
-    arg.type = ARG_NONE;
+    // Python spec expects BUFFER.arg to be an int
+    arg.type = ARG_INT;
+    arg.int_data.i = 0;
     UOp* u = uop_new(OPS_BUFFER, dtype, NULL, 0, &arg, NULL);
     if (shape && shape_count>0) {
         int32_t* shp = (int32_t*)malloc(sizeof(int32_t)*shape_count);

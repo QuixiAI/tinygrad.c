@@ -240,6 +240,10 @@ ImageDType dtypes_imagef(const int* shape, int shape_len) {
 
 // Type checking functions
 static inline int _dtype_is_image(const DType* dt){ return dt && (strcmp(dt->name,"imageh")==0 || strcmp(dt->name,"imagef")==0); }
+
+bool dtypes_is_image(const DType* dt) {
+    return _dtype_is_image(dt);
+}
 bool dtypes_is_float(const DType* dt) {
     // Python: def is_float(x: DType) -> bool: return x.scalar() in dtypes.floats or isinstance(x, ImageDType)
     if (_dtype_is_image(dt)) return true;

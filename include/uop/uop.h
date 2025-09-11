@@ -11,6 +11,7 @@
 // Forward declarations
 typedef struct ShapeTracker ShapeTracker;
 typedef struct UPat UPat;
+struct UOp;  // forward declaration for mixed tuple
 
 
 #ifdef __cplusplus
@@ -161,8 +162,18 @@ typedef enum {
     ARG_SHAPE_TRACKER,
     ARG_VAR,           // For variables with ranges
     ARG_PAD_PARAMS,    // For PAD: before/after per-dim
-    ARG_SHRINK_PARAMS  // For SHRINK: start/end per-dim
+    ARG_SHRINK_PARAMS, // For SHRINK: start/end per-dim
+    ARG_TUPLE2,        // Generic tuple of pairs (for WMMA/CONTRACT/UNROLL validation)
+    ARG_STRING,        // Single C string (for DEVICE)
+    ARG_STRLIST,       // List/tuple of C strings (for multi-device)
+    ARG_TUPLE_MIXED    // Heterogeneous tuple (for BUFFER_VIEW args)
 } UOpArgType;
+
+// Tags for ARG_TUPLE_MIXED items
+typedef enum {
+    MIXED_INT = 1,
+    MIXED_UOP = 2,
+} MixedTag;
 
 typedef struct UOpArg {
     UOpArgType type;
@@ -200,6 +211,22 @@ typedef struct UOpArg {
             int32_t* end;
             int32_t ndim;
         } shrink_data;
+        struct {
+            int count;
+            int* first;
+            int* second;
+        } tuple2;
+        struct {
+            char* s;
+        } str;
+        struct {
+            int count;
+            char** items;  // array of C strings
+        } strlist;
+        struct {
+            int count;
+            struct MixedItem { int tag; long long ival; struct UOp* uop; } *items;
+        } tmixed;
     };
 } UOpArg;
 
@@ -400,6 +427,24 @@ UOp* uop_detach(UOp* a);
 UOp* uop_cast(UOp* a, DType dtype);
 UOp* uop_cast_vec(UOp* a, DType dtype_scalar, int count);
 UOp* uop_broadcast(UOp* a, int count);
+// Structured emitters that populate ARG_TUPLE2 for validation-sensitive ops
+UOp* uop_wmma(UOp* a, UOp* b, UOp* acc, const int* first, const int* second, int count);
+UOp* uop_contract(UOp* x, const int* first, const int* second, int count);
+UOp* uop_unroll(UOp* x, const int* first, const int* second, int count);
+
+// DEVICE constructors
+UOp* uop_device_str(const char* dev);
+UOp* uop_device_tuple(const char* const* devs, int count);
+
+// BUFFER_VIEW constructor with heterogeneous tuple args (two elements)
+// tag0/tag1 are MIXED_INT or MIXED_UOP; provide ival/uop accordingly
+UOp* uop_buffer_view(UOp* buffer, int tag0, long long ival0, struct UOp* u0,
+                     int tag1, long long ival1, struct UOp* u1);
+// Convenience wrappers for common BUFFER_VIEW arg combinations
+UOp* uop_buffer_view_ii(UOp* buffer, long long a0, long long a1);
+UOp* uop_buffer_view_iU(UOp* buffer, long long a0, struct UOp* a1);
+UOp* uop_buffer_view_Ui(UOp* buffer, struct UOp* a0, long long a1);
+UOp* uop_buffer_view_UU(UOp* buffer, struct UOp* a0, struct UOp* a1);
 UOp* uop_where(UOp* cond, UOp* true_val, UOp* false_val);
 UOp* uop_mulacc(UOp* a, UOp* b, UOp* c);
 UOp* uop_reduce_axis(UOp* src, Ops reduce_op, int* axes, int axes_count);
@@ -496,6 +541,10 @@ void upat_set_arg_bind(UPat* pat, const char* bind_name);
 void upat_set_src(UPat* pat, UPat** src, size_t count);
 void upat_set_repeat(UPat* pat, UPat* repeated);
 void upat_set_fork(UPat* pat, UPat*** groups, const int* group_sizes, size_t group_count);
+
+// GroupOp helpers
+UPat* upat_group_ops(const bool* mask, UPat** src, size_t src_count);
+UPat* upat_group_all_except(Ops exclude, UPat** src, size_t src_count);
 
 // UPat compilation system
 PatternMatcher* pattern_matcher_new(PatternMatch* matches, size_t match_count, bool compiled);

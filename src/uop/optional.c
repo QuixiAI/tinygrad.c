@@ -1,4 +1,4 @@
-/* optional.c - Faithful line-by-line port of reference/tinygrad/uop/optional.py */
+/* optional.c - Faithful port of reference/tinygrad/uop/optional.py */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,417 +8,87 @@
 
 #include "uop/uop.h"
 #include "dtype/dtype.h"
+#include "helpers/helpers.h"
+#include "uop/optional.h"
 
-// Forward declarations from transcendental.c
-extern const DType* TRANSCENDENTAL_SUPPORTED_DTYPES[];
-extern int TRANSCENDENTAL_SUPPORTED_COUNT;
-
+// transcendental functions
 extern UOp* transcendental_xexp2(UOp* x);
 extern UOp* transcendental_xlog2(UOp* x);
 extern UOp* transcendental_xsin(UOp* x, bool fast, float switch_over);
-
-// Forward declarations from ops.c
-extern UOp* uop_sqrt(UOp* a);
-
-// Forward declarations needed for this module
-extern UOp* symbolic_simplify(UOp* uop);
-
-// Helper functions (would need to be implemented based on dtypes module)
-// For now, implement basic versions
-
-// ***** optional *****
-
-// powers_of_two = {2**i:i for i in range(64)}
-static int powers_of_two[64] = {0};
-static bool powers_of_two_initialized = false;
-
-static void init_powers_of_two(void) {
-    if (!powers_of_two_initialized) {
-        for (int i = 0; i < 64; i++) {
-            powers_of_two[i] = i;
-        }
-        powers_of_two_initialized = true;
-    }
-}
-
-// Helper function to check if dtype is in dtypes.ints
-bool is_dtype_int(const DType* dt) {
-    if (!dt) return false;
-    return (dt == &dtypes.int8 || dt == &dtypes.int16 || dt == &dtypes.int32 || dt == &dtypes.int64);
-}
-
-// Helper function to check if dtype is in dtypes.uints
-bool is_dtype_uint(const DType* dt) {
-    if (!dt) return false;
-    return (dt == &dtypes.uint8 || dt == &dtypes.uint16 || dt == &dtypes.uint32 || dt == &dtypes.uint64);
-}
-
-// Helper function to check if dtype is in dtypes.sints
-bool is_dtype_sint(const DType* dt) {
-    if (!dt) return false;
-    return (dt == &dtypes.int8 || dt == &dtypes.int16 || dt == &dtypes.int32 || dt == &dtypes.int64);
-}
-
-// Pattern list structure
-typedef struct {
-    UPat* pattern;
-    UOp* (*func)(UOp** src, size_t src_count);
-} PatternEntry;
-
-// Pattern matcher structure for patterns
-typedef struct OptionalPatternMatcher {
-    PatternEntry* patterns;
-    size_t pattern_count;
-    size_t capacity;
-} OptionalPatternMatcher;
-
-// Global pattern matcher instance
-static OptionalPatternMatcher* pattern_matcher = NULL;
-
-// Check if dtype is supported for transcendental ops
-bool is_transcendental_dtype(const DType* dt) {
-    if (!dt) return false;
-    for (int i = 0; i < TRANSCENDENTAL_SUPPORTED_COUNT; i++) {
-        if (dt == TRANSCENDENTAL_SUPPORTED_DTYPES[i]) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Pattern functions
-UOp* pattern_exp2_func(UOp** src, size_t src_count) {
-    if (src_count != 1) return NULL;
-    return transcendental_xexp2(src[0]);
-}
-
-UOp* pattern_log2_func(UOp** src, size_t src_count) {
-    if (src_count != 1) return NULL;
-    return transcendental_xlog2(src[0]);
-}
-
-UOp* pattern_sin_func(UOp** src, size_t src_count) {
-    if (src_count != 1) return NULL;
-    return transcendental_xsin(src[0], false, 10000.0f);
-}
-
-UOp* pattern_sqrt_func(UOp** src, size_t src_count) {
-    if (src_count != 1) return NULL;
-    return uop_sqrt(src[0]);
-}
-
-UOp* pattern_mod_to_and_func(UOp** src, size_t src_count) {
-    if (src_count != 2) return NULL;
-    
-    // x % (2**y) -> x & (2**y-1)
-    UOp* x = src[0];
-    UOp* c = src[1];
-    
-    // Check if c is a constant power of two
-    if (c->arg.type != ARG_CONST) return NULL;
-    
-    double c_val = c->arg.const_data.const_value;
-    if (c_val <= 0) return NULL;
-    
-    // Check if c is a power of two
-    int power = -1;
-    for (int i = 0; i < 64; i++) {
-        double power_val = pow(2.0, i);
-        if (fabs(c_val - power_val) < 1e-10) {
-            power = i;
-            break;
-        }
-    }
-    
-    if (power == -1) return NULL;
-    
-    // Generate c-1 constant
-    UOp* c_minus_one = uop_const(x->dtype, pow(2.0, power) - 1);
-    UOp* and_result = uop_and(x, c_minus_one);
-    
-    return and_result;
-}
-
-UOp* pattern_mul_to_shl_func(UOp** src, size_t src_count) {
-    if (src_count != 2) return NULL;
-    
-    // x*(2**y) -> shl(x,y)
-    UOp* x = src[0];
-    UOp* c = src[1];
-    
-    if (!is_dtype_int(&x->dtype)) return NULL;
-    
-    // Check if c is a constant power of two
-    if (c->arg.type != ARG_CONST) return NULL;
-    
-    double c_val = c->arg.const_data.const_value;
-    if (c_val <= 0) return NULL;
-    
-    // Find power
-    int power = -1;
-    for (int i = 0; i < 64; i++) {
-        double power_val = pow(2.0, i);
-        if (fabs(c_val - power_val) < 1e-10) {
-            power = i;
-            break;
-        }
-    }
-    
-    if (power == -1) return NULL;
-    
-    // Generate constant y
-    UOp* y_const = uop_const(dtypes.int32, (double)power);
-    UOp* shl_result = uop_shl(x, y_const);
-    
-    return shl_result;
-}
-
-UOp* pattern_idiv_uint_to_shr_func(UOp** src, size_t src_count) {
-    if (src_count != 2) return NULL;
-    
-    // x//(2**y) -> shr(x,y) for uints
-    UOp* x = src[0];
-    UOp* c = src[1];
-    
-    if (!is_dtype_uint(&x->dtype)) return NULL;
-    
-    // Check if c is a constant power of two
-    if (c->arg.type != ARG_CONST) return NULL;
-    
-    double c_val = c->arg.const_data.const_value;
-    if (c_val <= 0) return NULL;
-    
-    // Find power
-    int power = -1;
-    for (int i = 0; i < 64; i++) {
-        double power_val = pow(2.0, i);
-        if (fabs(c_val - power_val) < 1e-10) {
-            power = i;
-            break;
-        }
-    }
-    
-    if (power == -1) return NULL;
-    
-    // Generate constant y
-    UOp* y_const = uop_const(dtypes.int32, (double)power);
-    UOp* shr_result = uop_shr(x, y_const);
-    
-    return shr_result;
-}
-
-UOp* pattern_idiv_sint_to_shr_func(UOp** src, size_t src_count) {
-    if (src_count != 2) return NULL;
-    
-    // x//(2**y) -> shr(x,y) for sints with adjustment
-    UOp* x = src[0];
-    UOp* c = src[1];
-    
-    if (!is_dtype_sint(&x->dtype)) return NULL;
-    
-    // Check if c is a constant power of two
-    if (c->arg.type != ARG_CONST) return NULL;
-    
-    double c_val = c->arg.const_data.const_value;
-    if (c_val <= 0) return NULL;
-    
-    // Find power
-    int power = -1;
-    for (int i = 0; i < 64; i++) {
-        double power_val = pow(2.0, i);
-        if (fabs(c_val - power_val) < 1e-10) {
-            power = i;
-            break;
-        }
-    }
-    
-    if (power == -1) return NULL;
-    
-    // Simplified version: just return regular division for now
-    // Full implementation would be complex due to negative handling
-    UOp* y_const = uop_const(dtypes.int32, (double)power);
-    return uop_div(x, uop_exp2(y_const));
-    
-    // TODO: Implement full version with condition and adjustments
-    // (x+(x<0).where(c-1, 0)) >> v where v is the power
-}
-
-UOp* pattern_neg_one_func(UOp** src, size_t src_count) {
-    if (src_count != 1) return NULL;
-    
-    // x*-1 -> x.alu(Ops.NEG)
-    UOp* x = src[0];
-    return uop_neg(x);
-}
-
-UOp* pattern_neg_sub_func(UOp** src, size_t src_count) {
-    if (src_count != 2) return NULL;
-    
-    // x+y.alu(Ops.NEG) -> x.alu(Ops.SUB, y)
-    UOp* x = src[0];
-    UOp* y = src[1];
-    
-    // Check if the second op is NEG
-    if (y->op == OPS_NEG && y->src_count == 1) {
-        return uop_sub(x, y->src[0]);
-    }
-    
-    return NULL;
-}
-
-// Initialize pattern matcher
-void optional_patterns_init(void) {
-    init_powers_of_two();
-    
-    // Create pattern matcher
-    pattern_matcher = (OptionalPatternMatcher*)malloc(sizeof(OptionalPatternMatcher));
-    if (!pattern_matcher) return;
-    
-    pattern_matcher->patterns = NULL;
-    pattern_matcher->pattern_count = 0;
-    pattern_matcher->capacity = 16;
-    pattern_matcher->patterns = (PatternEntry*)malloc(pattern_matcher->capacity * sizeof(PatternEntry));
-    if (!pattern_matcher->patterns) {
-        free(pattern_matcher);
-        pattern_matcher = NULL;
-        return;
-    }
-    
-    // Build patterns for transcendental ops
-    for (int i = 0; i < TRANSCENDENTAL_SUPPORTED_COUNT; i++) {
-        const DType* dt = TRANSCENDENTAL_SUPPORTED_DTYPES[i];
-        
-        // EXP2 pattern
-        UPat* exp2_pattern = upat_create();
-        exp2_pattern->type = UPAT_OP;
-        exp2_pattern->op_data.op = OPS_EXP2;
-        exp2_pattern->dtype = (DType*)dt;  // Cast away const
-        
-        if (pattern_matcher->pattern_count >= pattern_matcher->capacity) {
-            pattern_matcher->capacity *= 2;
-            pattern_matcher->patterns = (PatternEntry*)realloc(pattern_matcher->patterns, 
-                pattern_matcher->capacity * sizeof(PatternEntry));
-        }
-        
-        pattern_matcher->patterns[pattern_matcher->pattern_count].pattern = exp2_pattern;
-        pattern_matcher->patterns[pattern_matcher->pattern_count].func = pattern_exp2_func;
-        pattern_matcher->pattern_count++;
-        
-        // LOG2 pattern
-        UPat* log2_pattern = upat_create();
-        log2_pattern->type = UPAT_OP;
-        log2_pattern->op_data.op = OPS_LOG2;
-        log2_pattern->dtype = (DType*)dt;
-        
-        if (pattern_matcher->pattern_count >= pattern_matcher->capacity) {
-            pattern_matcher->capacity *= 2;
-            pattern_matcher->patterns = (PatternEntry*)realloc(pattern_matcher->patterns, 
-                pattern_matcher->capacity * sizeof(PatternEntry));
-        }
-        
-        pattern_matcher->patterns[pattern_matcher->pattern_count].pattern = log2_pattern;
-        pattern_matcher->patterns[pattern_matcher->pattern_count].func = pattern_log2_func;
-        pattern_matcher->pattern_count++;
-        
-        // SIN pattern
-        UPat* sin_pattern = upat_create();
-        sin_pattern->type = UPAT_OP;
-        sin_pattern->op_data.op = OPS_SIN;
-        sin_pattern->dtype = (DType*)dt;
-        
-        if (pattern_matcher->pattern_count >= pattern_matcher->capacity) {
-            pattern_matcher->capacity *= 2;
-            pattern_matcher->patterns = (PatternEntry*)realloc(pattern_matcher->patterns, 
-                pattern_matcher->capacity * sizeof(PatternEntry));
-        }
-        
-        pattern_matcher->patterns[pattern_matcher->pattern_count].pattern = sin_pattern;
-        pattern_matcher->patterns[pattern_matcher->pattern_count].func = pattern_sin_func;
-        pattern_matcher->pattern_count++;
-    }
-    
-    // SQRT pattern
-    for (int i = 0; i < TRANSCENDENTAL_SUPPORTED_COUNT; i++) {
-        const DType* dt = TRANSCENDENTAL_SUPPORTED_DTYPES[i];
-        
-        UPat* sqrt_pattern = upat_create();
-        sqrt_pattern->type = UPAT_OP;
-        sqrt_pattern->op_data.op = OPS_SQRT;
-        sqrt_pattern->dtype = (DType*)dt;
-        
-        if (pattern_matcher->pattern_count >= pattern_matcher->capacity) {
-            pattern_matcher->capacity *= 2;
-            pattern_matcher->patterns = (PatternEntry*)realloc(pattern_matcher->patterns, 
-                pattern_matcher->capacity * sizeof(PatternEntry));
-        }
-        
-        pattern_matcher->patterns[pattern_matcher->pattern_count].pattern = sqrt_pattern;
-        pattern_matcher->patterns[pattern_matcher->pattern_count].func = pattern_sqrt_func;
-        pattern_matcher->pattern_count++;
-    }
-    
-    // Additional patterns would be added here based on ops availability
-}
-
-// Get late rewrite patterns - simplified version for now
-PatternMatcher* get_late_rewrite_patterns(Ops* available_ops, size_t ops_count, bool force_transcendental) {
-    // This is a simplified version - full implementation would build patterns dynamically
-    
-    // Create a single pattern matcher for now
-    PatternMatch patterns[1];
-    patterns[0].pattern = NULL;  // No patterns initially
-    patterns[0].callback = NULL;
-    patterns[0].user_data = NULL;
-    
-    PatternMatcher* pm = pattern_matcher_new(patterns, 1, false);
-    if (!pm) return NULL;
-    
-    // TODO: Build patterns dynamically based on available_ops and force_transcendental
-    
-    return pm;
-}
-
-// Fast IDIV functions
-typedef struct {
-    char* device;
-    UOp* (*fast_idiv_func)(const char*, UOp*, int);
-} FastIDivContext;
-
+extern UOp* transcendental_xpow(UOp* base, UOp* exponent);
 extern UOp* transcendental_fast_idiv(const char* device, UOp* x, int d);
 
-// Apply patterns to UOp graph - simplified
-UOp* optional_apply_patterns(UOp* root, PatternMatcher* pm) {
-    if (!root || !pm) return root;
-    
-    // For now, just return the root unchanged
-    // Full implementation would apply the pattern matching logic
-    
-    return root;
-}
+// Utilities
+static bool ops_has(const Ops* ops, size_t n, Ops op){ for (size_t i=0;i<n;i++) if (ops[i]==op) return true; return false; }
+static bool is_power_of_two_double(double x, int* out_shift){ if (x<=0) return false; double y; double ip = modf(log2(x), &y); if (fabs(ip) < 1e-12){ if(out_shift) *out_shift=(int)llround(y); return true; } return false; }
 
-// Module cleanup
-void optional_patterns_cleanup(void) {
-    if (pattern_matcher) {
-        for (size_t i = 0; i < pattern_matcher->pattern_count; i++) {
-            if (pattern_matcher->patterns[i].pattern) {
-                upat_free(pattern_matcher->patterns[i].pattern);
-            }
+// Callbacks (PatternMatch -> callback)
+static void* cb_to_xexp2(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->src_count!=1) return NULL; return transcendental_xexp2(n->src[0]); }
+static void* cb_to_xlog2(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->src_count!=1) return NULL; return transcendental_xlog2(n->src[0]); }
+static void* cb_to_xsin(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->src_count!=1) return NULL; return transcendental_xsin(n->src[0], false, 10000.0f); }
+static void* cb_sqrt_to_xpow(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->src_count!=1) return NULL; UOp* half = uop_const_like(n->src[0], 0.5); return transcendental_xpow(n->src[0], half); }
+
+static void* cb_mod_to_and(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->src_count!=2) return NULL; UOp* x=n->src[0]; UOp* c=n->src[1]; if (c->arg.type!=ARG_CONST) return NULL; double v=c->arg.const_data.const_value; int sh=0; if (!is_power_of_two_double(v,&sh)) return NULL; UOp* cmo = uop_const(x->dtype, v-1.0); return uop_and(x, cmo); }
+
+static void* cb_mul_to_shl(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->src_count!=2) return NULL; UOp* x=n->src[0]; UOp* c=n->src[1]; if (!dtypes_is_int(&x->dtype)) return NULL; if (c->arg.type!=ARG_CONST) return NULL; double v=c->arg.const_data.const_value; int sh=0; if (!is_power_of_two_double(v,&sh)) return NULL; UOp* y=uop_const(dtypes.uint, (double)sh); return uop_shl(x, y); }
+
+static void* cb_idiv_uint_to_shr(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->src_count!=2) return NULL; UOp* x=n->src[0]; UOp* c=n->src[1]; if (!dtypes_is_unsigned(&x->dtype)) return NULL; if (c->arg.type!=ARG_CONST) return NULL; double v=c->arg.const_data.const_value; int sh=0; if (!is_power_of_two_double(v,&sh)) return NULL; UOp* y=uop_const(dtypes.uint, (double)sh); return uop_shr(x, y); }
+
+static void* cb_idiv_sint_to_shr(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->src_count!=2) return NULL; UOp* x=n->src[0]; UOp* c=n->src[1]; if (!dtypes_is_int(&x->dtype)) return NULL; if (c->arg.type!=ARG_CONST) return NULL; double v=c->arg.const_data.const_value; int sh=0; if (!is_power_of_two_double(v,&sh)) return NULL; UOp* cm1 = uop_const(x->dtype, v-1.0); UOp* zero = uop_const(x->dtype, 0.0); UOp* adj = uop_where(uop_lt(x, zero), cm1, zero); UOp* y=uop_const(dtypes.uint, (double)sh); return uop_shr(uop_add(x, adj), y); }
+
+typedef struct { const char* device; } OptionalCtx;
+static void* cb_fast_idiv(void* ctx, void* node){ OptionalCtx* oc=(OptionalCtx*)ctx; UOp* n=(UOp*)node; if (n->src_count!=2) return NULL; UOp* x=n->src[0]; UOp* d=n->src[1]; if (d->arg.type!=ARG_INT && d->arg.type!=ARG_CONST) return NULL; int di = (d->arg.type==ARG_INT)? d->arg.int_data.i : (int)d->arg.const_data.const_value; return transcendental_fast_idiv(oc?oc->device:NULL, x, di); }
+static void* cb_fast_mod(void* ctx, void* node){ OptionalCtx* oc=(OptionalCtx*)ctx; UOp* n=(UOp*)node; if (n->src_count!=2) return NULL; UOp* x=n->src[0]; UOp* d=n->src[1]; if (d->arg.type!=ARG_INT && d->arg.type!=ARG_CONST) return NULL; int di = (d->arg.type==ARG_INT)? d->arg.int_data.i : (int)d->arg.const_data.const_value; UOp* f = transcendental_fast_idiv(oc?oc->device:NULL, x, di); if (!f) return NULL; return uop_sub(x, uop_mul(d, f)); }
+
+static void* cb_neg_one(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->op!=OPS_MUL || n->src_count!=2) return NULL; UOp* x=n->src[0]; UOp* y=n->src[1]; if (y->op==OPS_CONST && y->arg.type==ARG_CONST && y->arg.const_data.const_value==-1.0) return uop_neg(x); return NULL; }
+static void* cb_neg_sub(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->op!=OPS_ADD || n->src_count!=2) return NULL; UOp* x=n->src[0]; UOp* y=n->src[1]; if (y->op==OPS_NEG && y->src_count==1) return uop_sub(x, y->src[0]); return NULL; }
+
+// Build PatternMatcher
+PatternMatcher* get_late_rewrite_patterns(const Ops* available_ops, size_t ops_count, bool force_transcendental) {
+    PatternMatch* entries = NULL; size_t m=0, cap=16; entries=(PatternMatch*)malloc(sizeof(PatternMatch)*cap);
+
+    // helper macro
+    #define ADD_ENTRY(PAT, CB) do { if (m>=cap){ cap*=2; entries=(PatternMatch*)realloc(entries,sizeof(PatternMatch)*cap);} entries[m].pattern=(PAT); entries[m].callback=(CB); entries[m].user_data=NULL; m++; } while(0)
+
+    // Transcendentals
+    if (force_transcendental || !ops_has(available_ops, ops_count, OPS_EXP2)) { UPat* p=upat_op(OPS_EXP2, NULL, 0); ADD_ENTRY(p, cb_to_xexp2); }
+    if (force_transcendental || !ops_has(available_ops, ops_count, OPS_LOG2)) { UPat* p=upat_op(OPS_LOG2, NULL, 0); ADD_ENTRY(p, cb_to_xlog2); }
+    if (force_transcendental || !ops_has(available_ops, ops_count, OPS_SIN))  { UPat* p=upat_op(OPS_SIN,  NULL, 0); ADD_ENTRY(p, cb_to_xsin); }
+    // SQRT->xpow if SQRT not present
+    if (!ops_has(available_ops, ops_count, OPS_SQRT)) { UPat* p=upat_op(OPS_SQRT, NULL, 0); ADD_ENTRY(p, cb_sqrt_to_xpow); }
+    // MOD->AND
+    if (ops_has(available_ops, ops_count, OPS_AND)) { UPat* p=upat_op(OPS_MOD, NULL, 0); ADD_ENTRY(p, cb_mod_to_and); }
+    // MUL->SHL
+    if (ops_has(available_ops, ops_count, OPS_SHL)) { UPat* p=upat_op(OPS_MUL, NULL, 0); ADD_ENTRY(p, cb_mul_to_shl); }
+    // IDIV->SHR (uint, int)
+    if (ops_has(available_ops, ops_count, OPS_SHR)) {
+        UPat* pidu = upat_op(OPS_IDIV, NULL, 0); ADD_ENTRY(pidu, cb_idiv_uint_to_shr);
+        UPat* pid  = upat_op(OPS_IDIV, NULL, 0); ADD_ENTRY(pid,  cb_idiv_sint_to_shr);
+        // fast_idiv patterns (if not disabled)
+        const char* dis = tg_getenv("DISABLE_FAST_IDIV");
+        if (!(dis && *dis)) {
+            UPat* pfi = upat_op(OPS_IDIV, NULL, 0); ADD_ENTRY(pfi, cb_fast_idiv);
+            UPat* pfm = upat_op(OPS_MOD,  NULL, 0); ADD_ENTRY(pfm, cb_fast_mod);
         }
-        
-        if (pattern_matcher->patterns) {
-            free(pattern_matcher->patterns);
-        }
-        
-        free(pattern_matcher);
-        pattern_matcher = NULL;
     }
+    // NEG and SUB rewrites
+    if (ops_has(available_ops, ops_count, OPS_NEG)) { UPat* p=upat_op(OPS_MUL, NULL, 0); ADD_ENTRY(p, cb_neg_one); }
+    if (ops_has(available_ops, ops_count, OPS_SUB)) { UPat* p=upat_op(OPS_ADD, NULL, 0); ADD_ENTRY(p, cb_neg_sub); }
+
+    PatternMatcher* pm = pattern_matcher_new(entries, m, false);
+    free(entries);
+    return pm;
+    #undef ADD_ENTRY
 }
 
-// Legacy interface for backward compatibility
-void optional_init(void) {
-    optional_patterns_init();
+static UOp* optional_apply_node(UOp* node, PatternMatcher* pm, OptionalCtx* ctx){
+    if (!node || !pm) return node;
+    // rewrite children first
+    for (size_t i=0;i<node->src_count;i++) node->src[i] = optional_apply_node(node->src[i], pm, ctx);
+    void* repl=NULL; if (pattern_matcher_apply(pm, node, ctx, &repl)==PM_OK && repl) return (UOp*)repl; return node;
 }
 
-void optional_cleanup(void) {
-    optional_patterns_cleanup();
+UOp* optional_apply_patterns_ex(UOp* root, PatternMatcher* pm, const char* device) {
+    OptionalCtx ctx = { .device = device };
+    return optional_apply_node(root, pm, &ctx);
 }

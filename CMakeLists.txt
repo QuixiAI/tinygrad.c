@@ -41,6 +41,9 @@ find_package(sqlite3 CONFIG QUIET)
 if (NOT sqlite3_FOUND)
   find_package(SQLite3 QUIET)
 endif()
+# Ensure Conan generators dir is on CMAKE_PREFIX_PATH for Z3
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/build/conan/build/Release/generators")
+find_package(Z3 CONFIG REQUIRED)
 
 # ---- numpy compat library ----
 add_library(numpy STATIC
@@ -155,6 +158,11 @@ if(TARGET tg_helpers)
 endif()
 add_stub_obj(tg_device        STUB_DEVICE)
 add_stub_obj(tg_uop           STUB_UOP)
+if (TARGET tg_uop)
+  # Ensure Z3 headers are available when compiling uop sources
+  target_link_libraries(tg_uop PUBLIC z3::libz3)
+  target_compile_definitions(tg_uop PUBLIC TG_HAVE_Z3=1 HAVE_Z3=1)
+endif()
 add_stub_obj(tg_gradient      STUB_GRADIENT)
 if(TARGET tg_gradient)
   target_link_libraries(tg_gradient PUBLIC numpy GSL::gsl GSL::gslcblas)
@@ -214,6 +222,8 @@ elseif (TARGET SQLite::SQLite3)
   target_link_libraries(tinygradc PUBLIC SQLite::SQLite3)
   target_compile_definitions(tinygradc PUBLIC TG_HAVE_SQLITE3=1)
 endif()
+target_link_libraries(tinygradc PUBLIC z3::libz3 stdc++)
+target_compile_definitions(tinygradc PUBLIC TG_HAVE_Z3=1 HAVE_Z3=1)
 
 # Link glib components if available (gio, gio-unix, glib, gobject)
 if (TARGET glib::gio)

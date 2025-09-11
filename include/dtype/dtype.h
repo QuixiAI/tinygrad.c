@@ -133,6 +133,7 @@ bool dtypes_is_float(const DType* dt);
 bool dtypes_is_int(const DType* dt);
 bool dtypes_is_unsigned(const DType* dt);
 bool dtypes_is_bool(const DType* dt);
+bool dtypes_is_image(const DType* dt);
 
 // Type conversion functions
 DType dtypes_from_py_float(double val);

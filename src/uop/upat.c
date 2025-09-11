@@ -1285,6 +1285,30 @@ void upat_set_fork(UPat* pat, UPat*** groups, const int* group_sizes, size_t gro
     for (size_t g=0; g<group_count; g++) pat->fork_group_sizes[g] = group_sizes[g];
 }
 
+// ===== GroupOp helpers =====
+UPat* upat_group_ops(const bool* mask, UPat** src, size_t src_count) {
+    if (!mask) return NULL;
+    UPat* pat = upat_create();
+    pat->type = UPAT_OP;
+    // count ops
+    size_t count=0; for (int op=0; op<OPS_MAX_VALUE; op++) if (mask[op]) count++;
+    if (count==0) return pat;
+    pat->op_list = (Ops*)malloc(sizeof(Ops)*count);
+    pat->op_list_count = count;
+    size_t idx=0; for (int op=0; op<OPS_MAX_VALUE; op++) if (mask[op]) pat->op_list[idx++]=(Ops)op;
+    if (src_count>0 && src) upat_set_src(pat, src, src_count);
+    return pat;
+}
+
+UPat* upat_group_all_except(Ops exclude, UPat** src, size_t src_count) {
+    UPat* pat = upat_create(); pat->type = UPAT_OP;
+    size_t count=0; for (int op=0; op<OPS_MAX_VALUE; op++) if (op!=exclude) count++;
+    pat->op_list=(Ops*)malloc(sizeof(Ops)*count); pat->op_list_count=count;
+    size_t idx=0; for (int op=0; op<OPS_MAX_VALUE; op++) if (op!=exclude) pat->op_list[idx++]=(Ops)op;
+    if (src_count>0 && src) upat_set_src(pat, src, src_count);
+    return pat;
+}
+
 // Module initialization
 void upat_init_system(void) {
     // Initialize pattern matchers
