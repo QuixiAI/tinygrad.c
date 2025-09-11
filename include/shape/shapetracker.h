@@ -40,6 +40,15 @@ bool shapetracker_contiguous(const ShapeTracker *st);
 int32_t shapetracker_num_views(const ShapeTracker *st);
 int32_t shapetracker_real_size(const ShapeTracker *st);
 int32_t shapetracker_offset(const ShapeTracker *st);
+// Compute real strides per axis. Returns a newly-allocated array of length ndim.
+// For masked/unknown axes, the stride value is INT32_MIN. Caller must free.
+int32_t* shapetracker_real_strides(const ShapeTracker* st, bool ignore_valid);
+// Default helper: ignore_valid = false
+int32_t* shapetracker_real_strides_default(const ShapeTracker* st);
+// Return indices of axes with unit stride (==1). Caller must free.
+int* shapetracker_unit_stride_axes(const ShapeTracker* st, bool ignore_valid, int* out_count);
+// Default helper: ignore_valid = false
+int* shapetracker_unit_stride_axes_default(const ShapeTracker* st, int* out_count);
 
 // Comparison operations
 bool shapetracker_equal(const ShapeTracker *st1, const ShapeTracker *st2);
@@ -103,6 +112,16 @@ IndexedUOps *shapetracker_to_indexed_uops(const ShapeTracker *st);
 void indexed_uops_free(IndexedUOps *uops);
 // Capital S version for compatibility with existing tests
 ShapeTracker *ShapeTracker_from_shape(const int32_t *shape, int32_t ndim);
+
+// Python-parity helpers (stubs unless view-level support is added)
+// Return set of variables referenced by views. Currently returns empty set.
+UOp** shapetracker_vars(const ShapeTracker* st, int* out_count);
+// Return mapping of variables to values. Currently returns empty mapping.
+UOp** shapetracker_var_vals(const ShapeTracker* st, int* out_count, int** out_vals);
+// Unbind variables from views, returning a new shapetracker and mapping. Currently returns a shallow copy and empty mapping.
+ShapeTracker* shapetracker_unbind(const ShapeTracker* st, UOp*** out_vars, int** out_vals, int* out_count);
+// Substitute variables in views with provided mapping. Currently returns a shallow copy.
+ShapeTracker* shapetracker_substitute(const ShapeTracker* st, UOp** from_vars, UOp** to_vals, int count);
 
 
 #ifdef __cplusplus

@@ -799,6 +799,14 @@ static UOp* upat_rewrite_process(UOp* node, bool* changed) {
     return node;
 }
 
+static UOp* _rewrite_with_pm(UOp* node, PatternMatcher* pm){
+    if (!node) return NULL;
+    // rewrite children first
+    for (size_t i=0;i<node->src_count;i++) node->src[i] = _rewrite_with_pm(node->src[i], pm);
+    void* repl=NULL; if (pattern_matcher_apply(pm, node, NULL, &repl) == PM_OK && repl){ UOp* r=(UOp*)repl; uop_unref(node); return r; }
+    return node;
+}
+
 UOp* upat_graph_rewrite(UOp* root, PatternMatcher* pm, const char* name) {
     (void)name;
     if (!root) return NULL;
@@ -811,8 +819,8 @@ UOp* upat_graph_rewrite(UOp* root, PatternMatcher* pm, const char* name) {
         UOp* out = upat_rewrite_process(root, &changed);
         return out;
     }
-    // default: no-op
-    return root;
+    // generic PM
+    return _rewrite_with_pm(root, pm);
 }
 
 char* upat_final_render(UOp* x, bool has_ctx, int depth) {

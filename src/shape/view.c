@@ -159,6 +159,12 @@ struct View {
     int32_t *mask_end;   // End of mask for each dimension (or NULL)
     bool has_mask;       // Whether mask is present
     bool contiguous;     // Whether view is contiguous
+    // Symbolic fields (optional). Raw pointers; no ownership of UOp nodes.
+    UOp** sym_shape;       // length ndim, or NULL
+    UOp** sym_strides;     // length ndim, or NULL
+    UOp*  sym_offset;      // single UOp, or NULL
+    UOp** sym_mask_start;  // length ndim, or NULL
+    UOp** sym_mask_end;    // length ndim, or NULL
 };
 
 // Line 132-158: View.create 
@@ -180,6 +186,12 @@ View *view_create_with_mask(const int32_t *shape, int32_t ndim, const int32_t *s
     
     view->ndim = ndim;
     view->offset = offset;
+    // Initialize symbolic fields to NULL
+    view->sym_shape = NULL;
+    view->sym_strides = NULL;
+    view->sym_offset = NULL;
+    view->sym_mask_start = NULL;
+    view->sym_mask_end = NULL;
     
     // Allocate and copy shape
     view->shape = malloc(ndim * sizeof(int32_t));
@@ -299,12 +311,48 @@ View *view_create(const int32_t *shape, int32_t ndim, const int32_t *strides, in
     return view_create_with_mask(shape, ndim, strides, num_strides, offset, NULL, NULL, 0);
 }
 
+// Symbolic constructor. This does NOT compute or set concrete mask.
+View *view_create_symbolic(UOp* const* sym_shape, int32_t ndim,
+                           UOp* const* sym_strides, int32_t num_strides,
+                           UOp* sym_offset,
+                           UOp* const* sym_mask_start, UOp* const* sym_mask_end, int32_t mask_ndim) {
+    // Create a minimal concrete view with ones shape to anchor ndim; offset 0
+    int32_t* ones = NULL; if (ndim>0){ ones = (int32_t*)malloc(sizeof(int32_t)*ndim); for (int i=0;i<ndim;i++) ones[i]=1; }
+    View* v = view_create_with_mask(ones, ndim, NULL, 0, 0, NULL, NULL, 0);
+    if (ones) free(ones);
+    if (!v) return NULL;
+    // Fill symbolic fields by shallow-copying pointer arrays
+    if (sym_shape && ndim>0) {
+        v->sym_shape = (UOp**)calloc((size_t)ndim, sizeof(UOp*));
+        if (!v->sym_shape) { view_free(v); return NULL; }
+        for (int i=0;i<ndim;i++) v->sym_shape[i] = (UOp*)sym_shape[i];
+    }
+    if (sym_strides && num_strides==ndim && ndim>0) {
+        v->sym_strides = (UOp**)calloc((size_t)ndim, sizeof(UOp*));
+        if (!v->sym_strides) { view_free(v); return NULL; }
+        for (int i=0;i<ndim;i++) v->sym_strides[i] = (UOp*)sym_strides[i];
+    }
+    v->sym_offset = sym_offset;
+    if (sym_mask_start && sym_mask_end && mask_ndim==ndim && ndim>0) {
+        v->sym_mask_start = (UOp**)calloc((size_t)ndim, sizeof(UOp*));
+        v->sym_mask_end   = (UOp**)calloc((size_t)ndim, sizeof(UOp*));
+        if (!v->sym_mask_start || !v->sym_mask_end) { view_free(v); return NULL; }
+        for (int i=0;i<ndim;i++) { v->sym_mask_start[i] = (UOp*)sym_mask_start[i]; v->sym_mask_end[i] = (UOp*)sym_mask_end[i]; }
+    }
+    return v;
+}
+
 void view_free(View *view) {
     if (!view) return;
     free(view->shape);
     free(view->strides);
     free(view->mask_start);
     free(view->mask_end);
+    // symbolic arrays (do not free the UOp nodes themselves)
+    if (view->sym_shape) free(view->sym_shape);
+    if (view->sym_strides) free(view->sym_strides);
+    if (view->sym_mask_start) free(view->sym_mask_start);
+    if (view->sym_mask_end) free(view->sym_mask_end);
     free(view);
 }
 
@@ -318,12 +366,32 @@ int32_t view_ndim(const View *view) {
 View *view_copy(const View *view) {
     if (!view) return NULL;
     
-    return view_create_with_mask(view->shape, view->ndim, 
-                                view->strides, view->ndim,
-                                view->offset,
-                                view->has_mask ? view->mask_start : NULL,
-                                view->has_mask ? view->mask_end : NULL,
-                                view->has_mask ? view->ndim : 0);
+    View* v = view_create_with_mask(view->shape, view->ndim, 
+                                    view->strides, view->ndim,
+                                    view->offset,
+                                    view->has_mask ? view->mask_start : NULL,
+                                    view->has_mask ? view->mask_end : NULL,
+                                    view->has_mask ? view->ndim : 0);
+    if (!v) return NULL;
+    // Shallow-copy symbolic fields
+    if (view->sym_shape && view->ndim>0) {
+        v->sym_shape = (UOp**)calloc((size_t)view->ndim, sizeof(UOp*));
+        if (!v->sym_shape) { view_free(v); return NULL; }
+        for (int i=0;i<view->ndim;i++) v->sym_shape[i] = view->sym_shape[i];
+    }
+    if (view->sym_strides && view->ndim>0) {
+        v->sym_strides = (UOp**)calloc((size_t)view->ndim, sizeof(UOp*));
+        if (!v->sym_strides) { view_free(v); return NULL; }
+        for (int i=0;i<view->ndim;i++) v->sym_strides[i] = view->sym_strides[i];
+    }
+    v->sym_offset = view->sym_offset;
+    if (view->sym_mask_start && view->sym_mask_end && view->ndim>0) {
+        v->sym_mask_start = (UOp**)calloc((size_t)view->ndim, sizeof(UOp*));
+        v->sym_mask_end   = (UOp**)calloc((size_t)view->ndim, sizeof(UOp*));
+        if (!v->sym_mask_start || !v->sym_mask_end) { view_free(v); return NULL; }
+        for (int i=0;i<view->ndim;i++) { v->sym_mask_start[i] = view->sym_mask_start[i]; v->sym_mask_end[i] = view->sym_mask_end[i]; }
+    }
+    return v;
 }
 
 // @functools.cache  # pylint: disable=method-cache-max-size-none
@@ -372,6 +440,119 @@ const int32_t *view_mask_ranges(const View *view) {
         ranges[i * 2 + 1] = view->mask_end[i];
     }
     return ranges;
+}
+
+// --- Symbolic accessors ---
+UOp* const* view_sym_shape(const View *view) { return view ? (UOp* const*)view->sym_shape : NULL; }
+UOp* const* view_sym_strides(const View *view) { return view ? (UOp* const*)view->sym_strides : NULL; }
+UOp* view_sym_offset(const View *view) { return view ? view->sym_offset : NULL; }
+UOp* const* view_sym_mask_start(const View *view) { return view ? (UOp* const*)view->sym_mask_start : NULL; }
+UOp* const* view_sym_mask_end(const View *view) { return view ? (UOp* const*)view->sym_mask_end : NULL; }
+bool view_has_symbolic(const View *view) {
+    if (!view) return false;
+    return (view->sym_shape || view->sym_strides || view->sym_offset || view->sym_mask_start || view->sym_mask_end);
+}
+
+// --- View-level symbolic helpers ---
+static bool is_var_uop(UOp* u) { return u && u->op == OPS_DEFINE_VAR; }
+
+static void collect_vars_from_expr(UOp* u, UOp*** acc, size_t* n, size_t* cap){
+    if (!u) return;
+    size_t tcnt=0; UOp** topo = uop_toposort(u, &tcnt);
+    if (!topo) return;
+    for (size_t i=0;i<tcnt;i++){
+        if (is_var_uop(topo[i])){
+            if (*n>=*cap){ *cap*=2; *acc=(UOp**)realloc(*acc, sizeof(UOp*)*(*cap)); }
+            (*acc)[(*n)++] = topo[i];
+        }
+    }
+    free(topo);
+}
+
+UOp** view_vars(const View* view, int* out_count) {
+    if (out_count) *out_count = 0;
+    if (!view) return NULL;
+    // Collect from all symbolic fields
+    size_t cap = 16, n = 0; UOp** acc = (UOp**)malloc(sizeof(UOp*)*cap);
+    if (!acc) return NULL;
+    // sym_shape
+    if (view->sym_shape){ for (int i=0;i<view->ndim;i++) collect_vars_from_expr(view->sym_shape[i], &acc, &n, &cap); }
+    if (view->sym_strides){ for (int i=0;i<view->ndim;i++) collect_vars_from_expr(view->sym_strides[i], &acc, &n, &cap); }
+    if (view->sym_offset) collect_vars_from_expr(view->sym_offset, &acc, &n, &cap);
+    if (view->sym_mask_start){ for (int i=0;i<view->ndim;i++) collect_vars_from_expr(view->sym_mask_start[i], &acc, &n, &cap); }
+    if (view->sym_mask_end){ for (int i=0;i<view->ndim;i++) collect_vars_from_expr(view->sym_mask_end[i], &acc, &n, &cap); }
+    // Dedup
+    size_t outn=0; UOp** dedup = upat_dedup(acc, n, &outn);
+    free(acc);
+    if (out_count) *out_count = (int)outn;
+    return dedup;
+}
+
+// Replace BIND(var, value) → value, collecting mapping
+static UOp* strip_bind_collect(UOp* u, UOp*** vars, UOp*** vals, int* n, int* cap){
+    if (!u) return NULL;
+    if (u->op == OPS_BIND && u->src_count==2){
+        // record mapping if not present
+        bool present=false; for (int i=0;i<*n;i++){ if ((*vars)[i]==u->src[0]){ present=true; break; } }
+        if (!present){
+            if (*n>=*cap){ *cap *= 2; *vars=(UOp**)realloc(*vars, sizeof(UOp*)*(*cap)); *vals=(UOp**)realloc(*vals, sizeof(UOp*)*(*cap)); }
+            (*vars)[*n] = u->src[0];
+            (*vals)[*n] = u->src[1];
+            (*n)++;
+        }
+        // recurse into value in case of nested binds
+        return strip_bind_collect(u->src[1], vars, vals, n, cap);
+    }
+    // process children
+    bool changed=false; UOp** src=NULL; size_t sc=u->src_count; if (sc>0){ src=(UOp**)malloc(sizeof(UOp*)*sc); for (size_t i=0;i<sc;i++){ src[i]=strip_bind_collect(u->src[i], vars, vals, n, cap); if (src[i]!=u->src[i]) changed=true; } }
+    if (!changed){ if (src) free(src); return u; }
+    UOp* repl = upat_replace(u, u->op, src, sc);
+    if (src) free(src);
+    return repl?repl:u;
+}
+
+View* view_unbind(const View* view, UOp*** out_vars, UOp*** out_vals, int* out_count){
+    if (out_vars) *out_vars=NULL;
+    if (out_vals) *out_vals=NULL;
+    if (out_count) *out_count=0;
+    if (!view) return NULL;
+    View* v = view_copy(view); if (!v) return NULL;
+    int cap=8, n=0; UOp** vars=(UOp**)malloc(sizeof(UOp*)*cap); UOp** vals=(UOp**)malloc(sizeof(UOp*)*cap);
+    if (!vars || !vals){ if (vars) free(vars); if (vals) free(vals); view_free(v); return NULL; }
+    // rewrite each symbolic field
+    if (v->sym_shape){ for (int i=0;i<v->ndim;i++) v->sym_shape[i] = strip_bind_collect(v->sym_shape[i], &vars, &vals, &n, &cap); }
+    if (v->sym_strides){ for (int i=0;i<v->ndim;i++) v->sym_strides[i] = strip_bind_collect(v->sym_strides[i], &vars, &vals, &n, &cap); }
+    if (v->sym_offset) v->sym_offset = strip_bind_collect(v->sym_offset, &vars, &vals, &n, &cap);
+    if (v->sym_mask_start){ for (int i=0;i<v->ndim;i++) v->sym_mask_start[i] = strip_bind_collect(v->sym_mask_start[i], &vars, &vals, &n, &cap); }
+    if (v->sym_mask_end){ for (int i=0;i<v->ndim;i++) v->sym_mask_end[i] = strip_bind_collect(v->sym_mask_end[i], &vars, &vals, &n, &cap); }
+    if (out_vars) *out_vars = vars; else free(vars);
+    if (out_vals) *out_vals = vals; else free(vals);
+    if (out_count) *out_count = n;
+    return v;
+}
+
+static UOp* substitute_vars(UOp* u, UOp** from_vars, UOp** to_vals, int count){
+    if (!u) return NULL;
+    // direct substitution by pointer equality on DEFINE_VAR nodes
+    if (u->op == OPS_DEFINE_VAR){
+        for (int i=0;i<count;i++) if (u == from_vars[i]) return to_vals[i];
+    }
+    bool changed=false; UOp** src=NULL; size_t sc=u->src_count; if (sc>0){ src=(UOp**)malloc(sizeof(UOp*)*sc); for (size_t i=0;i<sc;i++){ src[i]=substitute_vars(u->src[i], from_vars, to_vals, count); if (src[i]!=u->src[i]) changed=true; } }
+    if (!changed){ if (src) free(src); return u; }
+    UOp* repl = upat_replace(u, u->op, src, sc);
+    if (src) free(src);
+    return repl?repl:u;
+}
+
+View* view_substitute(const View* view, UOp** from_vars, UOp** to_vals, int count){
+    if (!view) return NULL;
+    View* v = view_copy(view); if (!v) return NULL;
+    if (v->sym_shape){ for (int i=0;i<v->ndim;i++) v->sym_shape[i] = substitute_vars(v->sym_shape[i], from_vars, to_vals, count); }
+    if (v->sym_strides){ for (int i=0;i<v->ndim;i++) v->sym_strides[i] = substitute_vars(v->sym_strides[i], from_vars, to_vals, count); }
+    if (v->sym_offset) v->sym_offset = substitute_vars(v->sym_offset, from_vars, to_vals, count);
+    if (v->sym_mask_start){ for (int i=0;i<v->ndim;i++) v->sym_mask_start[i] = substitute_vars(v->sym_mask_start[i], from_vars, to_vals, count); }
+    if (v->sym_mask_end){ for (int i=0;i<v->ndim;i++) v->sym_mask_end[i] = substitute_vars(v->sym_mask_end[i], from_vars, to_vals, count); }
+    return v;
 }
 
 // Line 308-349: reshape
@@ -1643,7 +1824,9 @@ void view_to_indexed_uops(const View* view, UOp** idxs, int idxs_count, UOp* vex
         // Create range indices for each dimension
         local_idxs = (UOp**)malloc(view->ndim * sizeof(UOp*));
         for (int i = 0; i < view->ndim; i++) {
-            UOp* shape_val = sint_to_uop(view->shape[i]);
+            UOp* shape_val = NULL;
+            if (view->sym_shape && view->sym_shape[i]) shape_val = view->sym_shape[i];
+            else shape_val = sint_to_uop(view->shape[i]);
             local_idxs[i] = uop_range(shape_val, i);
         }
         idxs = local_idxs;
@@ -1651,7 +1834,8 @@ void view_to_indexed_uops(const View* view, UOp** idxs, int idxs_count, UOp* vex
     }
     
     // Python line 118: iexpr = sint_to_uop(self.offset)
-    UOp* iexpr = sint_to_uop(view->offset);
+    UOp* iexpr = NULL;
+    if (view->sym_offset) iexpr = view->sym_offset; else iexpr = sint_to_uop(view->offset);
     
     // Python line 118: vexpr defaults to True
     if (vexpr == NULL) {
@@ -1664,25 +1848,48 @@ void view_to_indexed_uops(const View* view, UOp** idxs, int idxs_count, UOp* vex
         int32_t st = view->strides[i];
         
         // Line 120: if resolve(sh != 1) and resolve(st != 0): iexpr = iexpr + idx*st
-        if (sh != 1 && st != 0) {
-            UOp* stride_val = sint_to_uop(st);
-            UOp* term = uop_mul(idxs[i], stride_val);
+        // Prefer symbolic stride if present; if symbolic, add unconditionally (simplifier can fold 0s)
+        if (view->sym_strides && view->sym_strides[i]) {
+            UOp* term = uop_mul(idxs[i], view->sym_strides[i]);
             iexpr = uop_add(iexpr, term);
+        } else {
+            if (sh != 1 && st != 0) {
+                UOp* stride_val = sint_to_uop(st);
+                UOp* term = uop_mul(idxs[i], stride_val);
+                iexpr = uop_add(iexpr, term);
+            }
         }
         
         // Lines 121-123: Handle mask constraints
-        if (view->has_mask && view->mask_start && view->mask_end) {
+        if ((view->sym_mask_start && view->sym_mask_start[i]) || (view->sym_mask_end && view->sym_mask_end[i])) {
+            if (view->sym_mask_start && view->sym_mask_start[i]) {
+                UOp* cond = uop_ge(idxs[i], view->sym_mask_start[i]);
+                vexpr = uop_and(vexpr, cond);
+            } else if (view->has_mask && view->mask_start) {
+                if (view->mask_start[i] != 0) {
+                    UOp* m_start_val = sint_to_uop(view->mask_start[i]);
+                    UOp* cond = uop_ge(idxs[i], m_start_val);
+                    vexpr = uop_and(vexpr, cond);
+                }
+            }
+            if (view->sym_mask_end && view->sym_mask_end[i]) {
+                UOp* cond = uop_lt(idxs[i], view->sym_mask_end[i]);
+                vexpr = uop_and(vexpr, cond);
+            } else if (view->has_mask && view->mask_end) {
+                if (view->mask_end[i] != sh) {
+                    UOp* m_end_val = sint_to_uop(view->mask_end[i]);
+                    UOp* cond = uop_lt(idxs[i], m_end_val);
+                    vexpr = uop_and(vexpr, cond);
+                }
+            }
+        } else if (view->has_mask && view->mask_start && view->mask_end) {
             int32_t m_start = view->mask_start[i];
             int32_t m_end = view->mask_end[i];
-            
-            // Line 122: if resolve(m[0] != 0): vexpr = vexpr * (idx >= m[0])
             if (m_start != 0) {
                 UOp* m_start_val = sint_to_uop(m_start);
                 UOp* cond = uop_ge(idxs[i], m_start_val);
                 vexpr = uop_and(vexpr, cond);
             }
-            
-            // Line 123: if resolve(m[1] != sh): vexpr = vexpr * (idx < m[1])
             if (m_end != sh) {
                 UOp* m_end_val = sint_to_uop(m_end);
                 UOp* cond = uop_lt(idxs[i], m_end_val);

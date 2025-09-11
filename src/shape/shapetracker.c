@@ -5,9 +5,12 @@
 #include "uop/uop.h"
 #include "uop/ops.h"
 #include "uop/symbolic.h"
+#include "uop/uop.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <limits.h>
+#include <math.h>
 
 // Macro to mark unused parameters
 #define UNUSED(x) ((void)(x))
@@ -15,6 +18,45 @@
 
 // Python line 56-58: @dataclass(frozen=True, order=True) class ShapeTracker:
 // ShapeTracker struct is defined in the header file
+
+// extern symbolic_flat pattern set from symbolic.c
+extern struct PatternMatcher symbolic_flat;
+
+// Upcast PatternMatcher (pm_upcast)
+static void* cb_handle_upcast(void* ctx, void* node) {
+    (void)ctx; UOp* u=(UOp*)node; if (!u) return NULL;
+    if (!dtypes_is_int(&u->dtype)) return NULL;
+    if (!u->vmin_vmax_valid) return NULL;
+    double int_min = dtypes_min(&dtypes.int_);
+    double int_max = dtypes_max(&dtypes.int_);
+    bool overflow = (u->vmin < (long long)int_min) || (u->vmax > (long long)int_max);
+    int vcount = u->dtype.count;
+    DType int64 = dtypes.int64; if (vcount>1) int64 = dtype_vec(&dtypes.int64, vcount);
+    if (overflow) {
+        UOp** srcs = NULL; if (u->src_count>0){ srcs=(UOp**)malloc(sizeof(UOp*)*u->src_count); for(size_t i=0;i<u->src_count;i++) srcs[i] = uop_cast(u->src[i], int64); }
+        UOp* repl = uop_replace_ex(u, u->op, int64, srcs, u->src_count, &u->arg, u->tag);
+        if (srcs) free(srcs);
+        return repl;
+    }
+    bool any_i64=false; for (size_t i=0;i<u->src_count;i++){ DType sc = dtype_scalar(&u->src[i]->dtype); if (dtype_eq(&sc, &dtypes.int64)) { any_i64=true; break; } }
+    if (any_i64) {
+        // Rebuild node at int64 then cast back to original dtype
+        UOp** srcs = NULL; if (u->src_count>0){ srcs=(UOp**)malloc(sizeof(UOp*)*u->src_count); for(size_t i=0;i<u->src_count;i++) srcs[i] = uop_cast(u->src[i], int64); }
+        UOp* widened = uop_replace_ex(u, u->op, int64, srcs, u->src_count, &u->arg, u->tag);
+        if (srcs) free(srcs);
+        if (!widened) return NULL;
+        return uop_cast(widened, u->dtype);
+    }
+    return NULL;
+}
+
+static PatternMatcher* build_pm_upcast(void){
+    static PatternMatcher pm; static int inited=0; if (inited) return &pm; inited=1;
+    PatternMatch* entries = (PatternMatch*)calloc(1, sizeof(PatternMatch));
+    UPat* alu = upat_group_ops(group_op.is_alu, NULL, 0); upat_set_dtype(alu, &dtypes.int_);
+    entries[0].pattern = alu; entries[0].callback = cb_handle_upcast; entries[0].callback_ex = NULL; entries[0].user_data=NULL;
+    pm.matches = entries; pm.match_count=1; pm.capacity=1; pm.compiled=false; return &pm;
+}
 
 // Helper function to copy a ShapeTracker
 static ShapeTracker *shapetracker_copy(const ShapeTracker *st) {
@@ -662,24 +704,41 @@ ShapeTracker *shapetracker_invert(ShapeTracker *st, const int32_t *out_shape, in
 }
 
 // Python line 112-115: def axis_is_masked
+// Forward declaration
+static void views_to_indexed_uops(View **views, int num_views, UOp **idxs, int idxs_count, UOp **out_idx, UOp **out_valid);
+
 bool shapetracker_axis_is_masked(const ShapeTracker *st, int32_t axis) {
     if (!st || axis < 0 || axis >= shapetracker_ndim(st)) return false;
-    
-    // Check if the axis is masked in the last view
+    // Compute idx, valid via views_to_indexed_uops (includes symbolic + simplify stages)
+    UOp *idx=NULL, *valid=NULL;
+    views_to_indexed_uops((View**)st->views, st->num_views, NULL, 0, &idx, &valid);
+    if (!valid) return false;
+    // symbolic rewrite on valid
+    UOp* sink_srcs[2] = { idx, valid };
+    UOp* sink = uop_sink(sink_srcs, 2);
+    UOp* rew = upat_graph_rewrite(sink, &symbolic_flat, "axis_is_masked");
+    UOp* v = (rew && rew->src_count>=2) ? rew->src[1] : valid;
+    // Search for RANGE(axis)
+    size_t n=0; UOp** topo = uop_toposort(v, &n);
+    bool masked=false;
+    if (topo){
+        for (size_t i=0;i<n;i++){
+            UOp* u=topo[i]; if (u->op==OPS_RANGE){ int ax = (u->arg.type==ARG_INT)? u->arg.int_data.i : (int)u->arg.const_data.const_value; if (ax==axis){ masked=true; break; } }
+        }
+        free(topo);
+    }
+    if (masked) return true;
+    // Fallback: inspect last view mask ranges
     if (st->num_views > 0) {
         View *last_view = (View*)st->views[st->num_views - 1];
         const int32_t *mask = view_mask_ranges(last_view);
         if (mask) {
-            // Check if this axis has a non-full mask
             const int32_t *shape = view_shape(last_view);
             int32_t start = mask[axis * 2];
             int32_t end = mask[axis * 2 + 1];
-            if (start != 0 || end != shape[axis]) {
-                return true;
-            }
+            if (start != 0 || end != shape[axis]) return true;
         }
     }
-    
     return false;
 }
 
@@ -904,7 +963,10 @@ static void views_to_indexed_uops(View **views, int num_views, UOp **idxs, int i
     
     // Python lines 31-38: Apply graph rewrites and simplifications
     // Line 32-33: idx, valid = graph_rewrite(UOp.sink(idx, valid), symbolic_flat, name="indexing sym @ 1").src
-    // For now, we'll skip the complex graph rewriting (would need full pattern matching)
+    UOp* sink_srcs1[2] = { idx, valid };
+    UOp* sink1 = uop_sink(sink_srcs1, 2);
+    UOp* rew1 = upat_graph_rewrite(sink1, &symbolic_flat, "indexing sym @ 1");
+    if (rew1 && rew1->src_count>=2) { idx = rew1->src[0]; valid = rew1->src[1]; }
     
     // Line 35: if (newvalid:=simplify_valid(valid)) is not None: valid = newvalid
     UOp *newvalid = simplify_valid(valid);
@@ -915,10 +977,119 @@ static void views_to_indexed_uops(View **views, int num_views, UOp **idxs, int i
     if (newidx) idx = newidx;
     
     // Line 38: return graph_rewrite(UOp.sink(idx, valid), symbolic_flat+pm_upcast, name="indexing sym @ 2").src
-    // Skipping second graph rewrite for now
+    UOp* sink_srcs2[2] = { idx, valid };
+    UOp* sink2 = uop_sink(sink_srcs2, 2);
+    UOp* rew2 = upat_graph_rewrite(sink2, &symbolic_flat, "indexing sym @ 2a");
+    PatternMatcher* pm_upcast = build_pm_upcast();
+    UOp* rew3 = upat_graph_rewrite(rew2 ? rew2 : sink2, pm_upcast, "indexing sym @ 2b");
+    if (rew3 && rew3->src_count>=2) { idx = rew3->src[0]; valid = rew3->src[1]; }
     
     *out_idx = idx;
     *out_valid = valid;
+}
+
+// Compute real strides per Python views_to_real_strides
+// Returns a newly-allocated array of length ndim. For masked/unknown axes, the stride is INT32_MIN.
+static int32_t* views_to_real_strides(View **views, int num_views, bool ignore_valid, int* out_ndim) {
+    if (!views || num_views <= 0) { if(out_ndim) *out_ndim = 0; return NULL; }
+    View* last = views[num_views-1];
+    int ndim = view_ndim(last);
+    if (out_ndim) *out_ndim = ndim;
+    // Fast path: single view and unmasked
+    if (num_views == 1 && view_mask(last) == NULL) {
+        const int32_t* s = view_strides(last);
+        int32_t* ret = (int32_t*)malloc(sizeof(int32_t)*ndim);
+        for (int i=0;i<ndim;i++) ret[i] = s[i];
+        return ret;
+    }
+    int32_t* ret = (int32_t*)malloc(sizeof(int32_t)*ndim);
+    for (int i=0;i<ndim;i++) ret[i] = INT32_MIN; // None sentinel
+
+    // Build idx,valid with full pipeline
+    UOp *idx=NULL, *valid=NULL;
+    views_to_indexed_uops(views, num_views, NULL, 0, &idx, &valid);
+
+    // Split idx on ADD terms and detect stride contributions
+    UOp** terms=NULL; int nterms=0; split_uop(idx, OPS_ADD, &terms, &nterms);
+    for (int i=0;i<nterms;i++) {
+        UOp* c = terms[i];
+        if (c->op == OPS_RANGE) {
+            int ax = (c->arg.type==ARG_INT) ? c->arg.int_data.i : (int)c->arg.const_data.const_value;
+            if (ax >= 0 && ax < ndim) ret[ax] = 1;
+        } else if (c->op == OPS_MUL && c->src_count==2) {
+            UOp* a=c->src[0], *b=c->src[1];
+            int ax=-1; long long k=0; bool ok=false;
+            if (a->op==OPS_RANGE && (b->arg.type==ARG_INT || b->arg.type==ARG_CONST)) {
+                ax = (a->arg.type==ARG_INT) ? a->arg.int_data.i : (int)a->arg.const_data.const_value;
+                k = (b->arg.type==ARG_INT) ? b->arg.int_data.i : (long long)llround(b->arg.const_data.const_value);
+                ok=true;
+            } else if (b->op==OPS_RANGE && (a->arg.type==ARG_INT || a->arg.type==ARG_CONST)) {
+                ax = (b->arg.type==ARG_INT) ? b->arg.int_data.i : (int)b->arg.const_data.const_value;
+                k = (a->arg.type==ARG_INT) ? a->arg.int_data.i : (long long)llround(a->arg.const_data.const_value);
+                ok=true;
+            }
+            if (ok && ax>=0 && ax<ndim) ret[ax] = (int32_t)k;
+        }
+    }
+    if (terms) free(terms);
+
+    // used_ranges from idx toposort
+    size_t tcnt=0; UOp** topo = uop_toposort(idx, &tcnt);
+    bool* used = (bool*)calloc((size_t)ndim, sizeof(bool));
+    if (topo) {
+        for (size_t i=0;i<tcnt;i++) {
+            if (topo[i]->op == OPS_RANGE) {
+                int ax = (topo[i]->arg.type==ARG_INT) ? topo[i]->arg.int_data.i : (int)topo[i]->arg.const_data.const_value;
+                if (ax>=0 && ax<ndim) used[ax] = true;
+            }
+        }
+        free(topo);
+    }
+    // Axes not used → stride 0; keep 1/CONST where present; leave as None if untouched (masked later)
+    for (int i=0;i<ndim;i++) {
+        if (!used[i]) ret[i] = 0;
+        else if (ret[i] == INT32_MIN) ret[i] = 1; // RANGE without CONST → unit stride
+    }
+    free(used);
+
+    if (!ignore_valid && valid) {
+        size_t vcnt=0; UOp** vtopo = uop_toposort(valid, &vcnt);
+        if (vtopo) {
+            for (size_t i=0;i<vcnt;i++) {
+                if (vtopo[i]->op == OPS_RANGE) {
+                    int ax = (vtopo[i]->arg.type==ARG_INT) ? vtopo[i]->arg.int_data.i : (int)vtopo[i]->arg.const_data.const_value;
+                    if (ax>=0 && ax<ndim) ret[ax] = INT32_MIN; // masked → None
+                }
+            }
+            free(vtopo);
+        }
+    }
+    return ret;
+}
+
+int32_t* shapetracker_real_strides(const ShapeTracker* st, bool ignore_valid) {
+    if (!st || !st->views || st->num_views<=0) return NULL;
+    int ndim=0; return views_to_real_strides((View**)st->views, st->num_views, ignore_valid, &ndim);
+}
+
+int32_t* shapetracker_real_strides_default(const ShapeTracker* st) {
+    return shapetracker_real_strides(st, false);
+}
+
+int* shapetracker_unit_stride_axes(const ShapeTracker* st, bool ignore_valid, int* out_count) {
+    if (out_count) *out_count = 0;
+    if (!st || !st->views || st->num_views<=0) return NULL;
+    int ndim=0; int32_t* strides = views_to_real_strides((View**)st->views, st->num_views, ignore_valid, &ndim);
+    if (!strides) return NULL;
+    int* axes = (int*)malloc(sizeof(int)*ndim); int n=0;
+    for (int i=0;i<ndim;i++) if (strides[i] == 1) axes[n++]=i;
+    free(strides);
+    if (out_count) *out_count = n;
+    return axes;
+}
+
+int* shapetracker_unit_stride_axes_default(const ShapeTracker* st, int* out_count) {
+    return shapetracker_unit_stride_axes(st, false, out_count);
 }
 
 // Python lines 86-87: ShapeTracker.to_indexed_uops implementation
@@ -937,6 +1108,7 @@ IndexedUOps *shapetracker_to_indexed_uops(const ShapeTracker *st) {
 void indexed_uops_free(IndexedUOps *uops) {
     if (!uops) return;
     // UOps are managed elsewhere, we just free the container
+/* Upcast PM forward declarations moved to top-level */
     free(uops);
 }
 
@@ -944,4 +1116,105 @@ void indexed_uops_free(IndexedUOps *uops) {
 // Capital S version for compatibility with existing tests
 ShapeTracker *ShapeTracker_from_shape(const int32_t *shape, int32_t ndim) {
     return shapetracker_from_shape(shape, ndim);
+}
+
+// --- Python parity stubs: vars, var_vals, unbind, substitute ---
+UOp** shapetracker_vars(const ShapeTracker* st, int* out_count) {
+    if (out_count) *out_count = 0;
+    if (!st || !st->views || st->num_views<=0) return NULL;
+    size_t cap=16, n=0; UOp** acc=(UOp**)malloc(sizeof(UOp*)*cap);
+    if (!acc) return NULL;
+    for (int i=0;i<st->num_views;i++){
+        int vcnt=0; UOp** vv = view_vars((View*)st->views[i], &vcnt);
+        for (int j=0;j<vcnt;j++){
+            if (n>=cap){ cap*=2; acc=(UOp**)realloc(acc, sizeof(UOp*)*cap); }
+            acc[n++] = vv[j];
+        }
+        if (vv) free(vv);
+    }
+    size_t outn=0; UOp** dedup = upat_dedup(acc, n, &outn);
+    free(acc);
+    if (out_count) *out_count = (int)outn;
+    return dedup;
+}
+
+UOp** shapetracker_var_vals(const ShapeTracker* st, int* out_count, int** out_vals) {
+    if (out_count) *out_count = 0; if (out_vals) *out_vals = NULL;
+    if (!st || !st->views || st->num_views<=0) return NULL;
+    size_t cap=16, n=0; UOp** vars=(UOp**)malloc(sizeof(UOp*)*cap); int* vals=(int*)malloc(sizeof(int)*cap);
+    if (!vars || !vals){ if (vars) free(vars); if (vals) free(vals); return NULL; }
+    for (int i=0;i<st->num_views;i++){
+        UOp** vvars=NULL; UOp** vvals_u=NULL; int vcnt=0;
+        View* tmp = view_unbind((View*)st->views[i], &vvars, &vvals_u, &vcnt);
+        if (tmp) view_free(tmp);
+        for (int j=0;j<vcnt;j++){
+            UOp* val = vvals_u[j];
+            if (val && val->op==OPS_CONST && val->arg.type==ARG_CONST){
+                // dedup on var pointer
+                bool seen=false; for (size_t k=0;k<n;k++){ if (vars[k]==vvars[j]) { seen=true; break; } }
+                if (!seen){
+                    if (n>=cap){ cap*=2; vars=(UOp**)realloc(vars, sizeof(UOp*)*cap); vals=(int*)realloc(vals, sizeof(int)*cap); }
+                    vars[n] = vvars[j];
+                    vals[n] = (int)llround(val->arg.const_data.const_value);
+                    n++;
+                }
+            }
+        }
+        if (vvars) free(vvars);
+        if (vvals_u) free(vvals_u);
+    }
+    if (out_count) *out_count = (int)n; if (out_vals) *out_vals = vals; else free(vals);
+    return vars;
+}
+
+ShapeTracker* shapetracker_unbind(const ShapeTracker* st, UOp*** out_vars, int** out_vals, int* out_count) {
+    if (out_vars) *out_vars = NULL;
+    if (out_vals) *out_vals = NULL;
+    if (out_count) *out_count = 0;
+    if (!st || !st->views || st->num_views<=0) return NULL;
+    View** nviews = (View**)malloc(sizeof(View*)*st->num_views);
+    if (!nviews) return NULL;
+    size_t cap=16, n=0; UOp** vars=(UOp**)malloc(sizeof(UOp*)*cap); int* vals=(int*)malloc(sizeof(int)*cap);
+    if (!vars || !vals){ if (vars) free(vars); if (vals) free(vals); free(nviews); return NULL; }
+    for (int i=0;i<st->num_views;i++){
+        UOp** vvars=NULL; UOp** vvals_u=NULL; int vcnt=0;
+        nviews[i] = view_unbind((View*)st->views[i], &vvars, &vvals_u, &vcnt);
+        if (!nviews[i]) nviews[i] = view_copy((View*)st->views[i]);
+        for (int j=0;j<vcnt;j++){
+            UOp* val = vvals_u[j];
+            if (val && val->op==OPS_CONST && val->arg.type==ARG_CONST){
+                bool seen=false; for (size_t k=0;k<n;k++){ if (vars[k]==vvars[j]) { seen=true; break; } }
+                if (!seen){
+                    if (n>=cap){ cap*=2; vars=(UOp**)realloc(vars, sizeof(UOp*)*cap); vals=(int*)realloc(vals, sizeof(int)*cap); }
+                    vars[n] = vvars[j];
+                    vals[n] = (int)llround(val->arg.const_data.const_value);
+                    n++;
+                }
+            }
+        }
+        if (vvars) free(vvars);
+        if (vvals_u) free(vvals_u);
+    }
+    ShapeTracker* out = (ShapeTracker*)malloc(sizeof(ShapeTracker));
+    if (!out){ for (int i=0;i<st->num_views;i++) if (nviews[i]) view_free(nviews[i]); free(nviews); free(vars); free(vals); return NULL; }
+    out->num_views = st->num_views; out->views = (void**)nviews;
+    if (out_vars) *out_vars = vars; else free(vars);
+    if (out_vals) *out_vals = vals; else free(vals);
+    if (out_count) *out_count = (int)n;
+    return out;
+}
+
+ShapeTracker* shapetracker_substitute(const ShapeTracker* st, UOp** from_vars, UOp** to_vals, int count) {
+    if (!st || !st->views || st->num_views<=0) return NULL;
+    View** nviews = (View**)malloc(sizeof(View*)*st->num_views);
+    if (!nviews) return NULL;
+    for (int i=0;i<st->num_views;i++){
+        View* nv = view_substitute((View*)st->views[i], from_vars, to_vals, count);
+        if (!nv) nv = view_copy((View*)st->views[i]);
+        nviews[i] = nv;
+    }
+    ShapeTracker* out = (ShapeTracker*)malloc(sizeof(ShapeTracker));
+    if (!out){ for (int i=0;i<st->num_views;i++) if (nviews[i]) view_free(nviews[i]); free(nviews); return NULL; }
+    out->num_views = st->num_views; out->views = (void**)nviews;
+    return out;
 }
