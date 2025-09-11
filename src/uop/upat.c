@@ -10,6 +10,11 @@
 #include "uop/uop.h"
 #include "dtype/dtype.h"  // For dtypes
 
+// Meta keys used to store CUSTOM formatting strings and bindings
+static const char* META_CUSTOM_FMT = "custom_fmt";
+static const char* META_BIND_DTYPE = "bind_dtype";
+static const char* META_NOOP_STR = "noop_str";
+
 // Forward declarations
 typedef struct Context {
     int TRACK_MATCH_STATS;
@@ -27,6 +32,18 @@ void upat_init(UPat* pat) {
     pat->required_len = 0;
     pat->name = NULL;
     pat->dtype = NULL;
+    pat->op_list = NULL;
+    pat->op_list_count = 0;
+    pat->dtype_list = NULL;
+    pat->dtype_list_count = 0;
+    pat->has_int_arg = false;
+    pat->arg_int = 0;
+    pat->has_arg_bind = false;
+    pat->arg_bind_str = NULL;
+    pat->src_is_repeat = false;
+    pat->src_is_fork = false;
+    pat->fork_group_sizes = NULL;
+    pat->fork_group_count = 0;
 }
 
 UPat* upat_create(void) {
@@ -62,10 +79,11 @@ UOp* upat_get_clause(UPat* self, UOp* base, int depth) {
     if (self->type == UPAT_ANY) {
         assert(self->src_count == 1);
         UPat* src_pattern = (UPat*)self->src[0];
-        UOp* inner_or = upat_get_clause(src_pattern, base, depth);
-        UOp* noop_src[1] = {inner_or};
-        UOpArg noop_arg = {0};
-        return uop_new(OPS_OR, dtypes.void_, noop_src, 1, &noop_arg, NULL);
+        UOp* inner = upat_get_clause(src_pattern, base, depth);
+        UOp* or_src[1] = {inner};
+        UOp* the_or = uop_new(OPS_OR, dtypes.void_, or_src, 1, NULL, NULL);
+        UOp* and_src[1] = {the_or};
+        return uop_new(OPS_AND, dtypes.void_, and_src, 1, NULL, NULL);
     }
     
     // build the and_clause for acceptance
@@ -77,52 +95,154 @@ UOp* upat_get_clause(UPat* self, UOp* base, int depth) {
     if (!and_clauses) return NULL;
     
     if (self->type == UPAT_OP) {
-        // Check if op is multiple values
-        if (self->op_data.op > 0) {
-            // Create a bind operation - stub for now
-            UOp* bind_src[] = {base};
-            UOp* bind_op = uop_new(OPS_BIND, dtypes.void_, bind_src, 1, NULL, NULL);
-            
-            char op_arg_format[100];
-            sprintf(op_arg_format, "{0}.op in {%d}", self->op_data.op);
-            
-            UOp* custom_src[2] = {base, bind_op};
-            UOpArg custom_arg = {0};
-            UOp* custom_op = uop_new(OPS_CUSTOM, dtypes.void_, custom_src, 2, &custom_arg, NULL);
-            
-            if (and_count >= and_capacity) {
-                and_capacity *= 2;
-                and_clauses = (UOp**)realloc(and_clauses, and_capacity * sizeof(UOp*));
-                if (!and_clauses) {
-                    // Cleanup
-                    free(bind_op);
-                    return NULL;
-                }
+        // op equality or membership
+        char* full = NULL;
+        if (self->op_list && self->op_list_count > 1) {
+            // build "{0}.op in {a,b,c}"
+            size_t cap = 64; full = (char*)malloc(cap); full[0]='\0';
+            strcat(full, "{0}.op in {");
+            for (size_t i=0;i<self->op_list_count;i++){
+                char num[32]; snprintf(num, sizeof(num), "%d", (int)self->op_list[i]);
+                if (strlen(full)+strlen(num)+4 > cap){ cap*=2; full=(char*)realloc(full, cap);} 
+                if (i>0) strcat(full, ", "); strcat(full, num);
             }
-            and_clauses[and_count++] = custom_op;
+            strcat(full, "}");
+        } else {
+            char buf[64]; snprintf(buf, sizeof(buf), "{0}.op == %d", (int)self->op_data.op);
+            full = strdup(buf);
         }
+        UOp* custom_src[1] = {base};
+        UOp* custom_op = uop_new(OPS_CUSTOM, dtypes.bool_, custom_src, 1, NULL, NULL);
+        uop_meta_set(custom_op, META_CUSTOM_FMT, full);
+        if (and_count >= and_capacity) { and_capacity *= 2; and_clauses = (UOp**)realloc(and_clauses, and_capacity * sizeof(UOp*)); }
+        and_clauses[and_count++] = custom_op;
     }
-    
+
+    // strict length / required_len
+    if (self->strict_length || self->required_len > 0) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "len({0}.src) %s %d", self->strict_length ? "==" : ">=", self->required_len);
+        UOp* custom_src[1] = {base};
+        UOp* custom_op = uop_new(OPS_CUSTOM, dtypes.bool_, custom_src, 1, NULL, NULL);
+        uop_meta_set(custom_op, META_CUSTOM_FMT, strdup(buf));
+        if (and_count >= and_capacity) { and_capacity *= 2; and_clauses = (UOp**)realloc(and_clauses, and_capacity * sizeof(UOp*)); }
+        and_clauses[and_count++] = custom_op;
+    }
+
     if (self->name != NULL) {
-        UOp* define_var_src[1] = {NULL};
         UOpArg define_var_arg = {0};
-        UOp* define_var = uop_new(OPS_DEFINE_VAR, dtypes.void_, define_var_src, 0, &define_var_arg, NULL);
+        define_var_arg.type = ARG_VAR;
+        define_var_arg.var.name = strdup(self->name);
+        UOp* define_var = uop_new(OPS_DEFINE_VAR, dtypes.void_, NULL, 0, &define_var_arg, NULL);
         
         UOp* store_src[2] = {define_var, base};
-        UOpArg store_arg = {0};
-        UOp* store_op = uop_new(OPS_STORE, dtypes.void_, store_src, 2, &store_arg, NULL);
+        UOp* store_op = uop_new(OPS_STORE, dtypes.void_, store_src, 2, NULL, NULL);
         
         if (and_count >= and_capacity) {
             and_capacity *= 2;
             and_clauses = (UOp**)realloc(and_clauses, and_capacity * sizeof(UOp*));
             if (!and_clauses) {
                 // Cleanup
-                free(define_var);
-                free(store_op);
                 return NULL;
             }
         }
         and_clauses[and_count++] = store_op;
+    }
+
+    // arg checks
+    if (self->has_int_arg) {
+        char buf[64]; snprintf(buf, sizeof(buf), "{0}.arg == %d", self->arg_int);
+        UOp* custom_src[1] = {base};
+        UOp* custom_op = uop_new(OPS_CUSTOM, dtypes.bool_, custom_src, 1, NULL, NULL);
+        uop_meta_set(custom_op, META_CUSTOM_FMT, strdup(buf));
+        if (and_count >= and_capacity) { and_capacity*=2; and_clauses=(UOp**)realloc(and_clauses, and_capacity*sizeof(UOp*)); }
+        and_clauses[and_count++] = custom_op;
+    } else if (self->has_arg_bind && self->arg_bind_str) {
+        UOp* bind = uop_new(OPS_NOOP, dtypes.void_, NULL, 0, NULL, NULL);
+        uop_meta_set(bind, META_NOOP_STR, strdup(self->arg_bind_str));
+        UOp* custom_src[2] = {base, bind};
+        UOp* custom_op = uop_new(OPS_CUSTOM, dtypes.bool_, custom_src, 2, NULL, NULL);
+        uop_meta_set(custom_op, META_CUSTOM_FMT, strdup("{0}.arg == {1}"));
+        if (and_count >= and_capacity) { and_capacity*=2; and_clauses=(UOp**)realloc(and_clauses, and_capacity*sizeof(UOp*)); }
+        and_clauses[and_count++] = custom_op;
+    }
+
+    // dtype checks (single or list)
+    if (self->dtype != NULL || (self->dtype_list && self->dtype_list_count>0)) {
+        char* fmt = NULL;
+        if (self->dtype_list && self->dtype_list_count>1) {
+            // Render list inline: ({0}.dtype in [..] or {0}.dtype._scalar in [..])
+            size_t cap=64; fmt=(char*)malloc(cap); fmt[0]='\0';
+            strcat(fmt, "("); strcat(fmt, "{0}.dtype in [");
+            for (size_t i=0;i<self->dtype_list_count;i++){
+                const char* name = dtype_name(self->dtype_list[i]); if (!name) name="dtype";
+                size_t need=strlen(fmt)+strlen(name)+6; if (need>cap){cap*=2; fmt=(char*)realloc(fmt,cap);} 
+                if (i>0) strcat(fmt, ", "); strcat(fmt, name);
+            }
+            strcat(fmt, "] or {0}.dtype._scalar in [");
+            for (size_t i=0;i<self->dtype_list_count;i++){
+                const char* name = dtype_name(self->dtype_list[i]); if (!name) name="dtype";
+                size_t need=strlen(fmt)+strlen(name)+6; if (need>cap){cap*=2; fmt=(char*)realloc(fmt,cap);} 
+                if (i>0) strcat(fmt, ", "); strcat(fmt, name);
+            }
+            strcat(fmt, "])");
+            UOp* custom_src[1] = {base};
+            UOp* custom_op = uop_new(OPS_CUSTOM, dtypes.bool_, custom_src, 1, NULL, NULL);
+            uop_meta_set(custom_op, META_CUSTOM_FMT, fmt);
+            if (and_count >= and_capacity) { and_capacity *= 2; and_clauses = (UOp**)realloc(and_clauses, and_capacity * sizeof(UOp*)); }
+            and_clauses[and_count++] = custom_op;
+        } else {
+            UOp* bind = uop_new(OPS_NOOP, dtypes.void_, NULL, 0, NULL, NULL);
+            const char* dname = dtype_name((const DType*)self->dtype); if (!dname) dname="dtype";
+            uop_meta_set(bind, META_NOOP_STR, strdup(dname));
+            UOp* custom_src[2] = {base, bind};
+            UOp* custom_op = uop_new(OPS_CUSTOM, dtypes.bool_, custom_src, 2, NULL, NULL);
+            uop_meta_set(custom_op, META_CUSTOM_FMT, strdup("({0}.dtype == {1} or {0}.dtype._scalar == {1})"));
+            if (and_count >= and_capacity) { and_capacity *= 2; and_clauses = (UOp**)realloc(and_clauses, and_capacity * sizeof(UOp*)); }
+            and_clauses[and_count++] = custom_op;
+        }
+    }
+
+    // src matching: repeat, fork, or positional tuple
+    if (self->src_is_repeat && self->src && self->src_count>=1) {
+        // iterator NOOP name
+        char itname[32]; snprintf(itname, sizeof(itname), "ituop%d", depth);
+        UOp* it = uop_new(OPS_NOOP, dtypes.void_, NULL, 0, NULL, NULL);
+        uop_meta_set(it, META_NOOP_STR, strdup(itname));
+        UOp* match = upat_get_clause(self->src[0], it, depth+1);
+        UOp* range_src[3] = {match, it, base};
+        UOp* range = uop_new(OPS_RANGE, dtypes.bool_, range_src, 3, NULL, NULL);
+        uop_meta_set(range, META_CUSTOM_FMT, strdup("all([{0} for {1} in {2}.src])"));
+        if (and_count >= and_capacity) { and_capacity*=2; and_clauses=(UOp**)realloc(and_clauses, and_capacity*sizeof(UOp*)); }
+        and_clauses[and_count++] = range;
+    } else if (self->src_is_fork && self->fork_group_count>0 && self->src && self->src_count>0) {
+        // build OR of ANDs
+        size_t offset=0;
+        UOp** fork_items = (UOp**)malloc(self->fork_group_count * sizeof(UOp*));
+        for (size_t g=0; g<self->fork_group_count; g++){
+            int gsize = self->fork_group_sizes[g];
+            UOp** and_items = (UOp**)malloc(gsize * sizeof(UOp*));
+            for (int i=0;i<gsize;i++){
+                int idx = i;
+                UOp* gep = uop_gep(base, &idx, 1);
+                and_items[i] = upat_get_clause(self->src[offset + i], gep, depth);
+            }
+            offset += gsize;
+            fork_items[g] = uop_new(OPS_AND, dtypes.void_, and_items, gsize, NULL, NULL);
+            free(and_items);
+        }
+        UOp* the_or = uop_new(OPS_OR, dtypes.void_, fork_items, self->fork_group_count, NULL, NULL);
+        free(fork_items);
+        if (and_count >= and_capacity) { and_capacity*=2; and_clauses=(UOp**)realloc(and_clauses, and_capacity*sizeof(UOp*)); }
+        and_clauses[and_count++] = the_or;
+    } else if (self->src && self->src_count > 0) {
+        for (size_t i = 0; i < self->src_count; i++) {
+            int idx = (int)i;
+            UOp* gep = uop_gep(base, &idx, 1);
+            UOp* sub = upat_get_clause(self->src[i], gep, depth);
+            if (and_count >= and_capacity) { and_capacity *= 2; and_clauses = (UOp**)realloc(and_clauses, and_capacity * sizeof(UOp*)); }
+            and_clauses[and_count++] = sub;
+        }
     }
     
     // Additional clauses would go here (dtype, src, etc.)
@@ -250,6 +370,86 @@ UOp* upat_replace(UOp* uop, Ops new_op, UOp** new_src, size_t new_src_count) {
     return uop_new(new_op, uop->dtype, src_clone, new_src_count, &arg, NULL);
 }
 
+// helper: create AND from a vector of clauses
+static UOp* mk_and(UOp** items, size_t count) {
+    return uop_new(OPS_AND, dtypes.void_, items, count, NULL, NULL);
+}
+
+// helper: create OR from a vector of clauses
+static UOp* mk_or(UOp** items, size_t count) {
+    return uop_new(OPS_OR, dtypes.void_, items, count, NULL, NULL);
+}
+
+// clone a UOp* array segment
+static UOp** clone_uop_array(UOp** src, size_t n) {
+    UOp** out = (UOp**)malloc(n * sizeof(UOp*));
+    if (!out) return NULL;
+    memcpy(out, src, n * sizeof(UOp*));
+    return out;
+}
+
+// product of OR clauses' options -> returns a single OR of ANDs
+static UOp* or_product(UOp** or_clauses, size_t or_count) {
+    // Gather option lists for each OR
+    size_t* opt_counts = (size_t*)calloc(or_count, sizeof(size_t));
+    UOp*** opts = (UOp***)calloc(or_count, sizeof(UOp**));
+    if (!opt_counts || !opts) { free(opt_counts); free(opts); return NULL; }
+    for (size_t i = 0; i < or_count; i++) {
+        UOp* oc = or_clauses[i];
+        opt_counts[i] = oc->src_count;
+        opts[i] = oc->src;
+    }
+    // Compute total combinations
+    size_t total = 1;
+    for (size_t i = 0; i < or_count; i++) total *= opt_counts[i] ? opt_counts[i] : 1;
+    // Build combinations recursively using indices
+    UOp** or_items = (UOp**)malloc(total * sizeof(UOp*));
+    if (!or_items) { free(opt_counts); free(opts); return NULL; }
+    size_t or_idx = 0;
+    // Use mixed radix counter
+    size_t* idx = (size_t*)calloc(or_count, sizeof(size_t));
+    if (!idx) { free(or_items); free(opt_counts); free(opts); return NULL; }
+    bool done = false;
+    while (!done) {
+        // Build AND of chosen elements (each option may itself be AND or other)
+        // If an option is AND, expand its children; else include as single item
+        // First count total items
+        size_t and_cap = 8, and_cnt = 0;
+        UOp** and_items = (UOp**)malloc(and_cap * sizeof(UOp*));
+        if (!and_items) { free(idx); free(or_items); free(opt_counts); free(opts); return NULL; }
+        for (size_t i = 0; i < or_count; i++) {
+            UOp* choice = opts[i][idx[i]];
+            if (choice->op == OPS_AND) {
+                for (size_t k = 0; k < choice->src_count; k++) {
+                    if (and_cnt >= and_cap) { and_cap *= 2; and_items = (UOp**)realloc(and_items, and_cap * sizeof(UOp*)); }
+                    and_items[and_cnt++] = choice->src[k];
+                }
+            } else {
+                if (and_cnt >= and_cap) { and_cap *= 2; and_items = (UOp**)realloc(and_items, and_cap * sizeof(UOp*)); }
+                and_items[and_cnt++] = choice;
+            }
+        }
+        or_items[or_idx++] = mk_and(and_items, and_cnt);
+        free(and_items);
+        // increment mixed radix counter
+        for (ssize_t p = (ssize_t)or_count-1; p >= 0; p--) {
+            idx[p]++;
+            if (idx[p] < opt_counts[p]) break;
+            idx[p] = 0;
+            if (p == 0) done = true;
+        }
+    }
+    free(idx);
+    free(opt_counts);
+    free(opts);
+    UOp* out_or = mk_or(or_items, or_idx);
+    free(or_items);
+    return out_or;
+}
+
+// predicate: is STORE op
+static bool is_store(UOp* x) { return x && x->op == OPS_STORE; }
+
 PatternMatcherResult upat_do_process_and(UOp* a, UOp** out_result) {
     if (!a || !out_result) return PM_COMPILE_ERROR;
     
@@ -317,48 +517,106 @@ PatternMatcherResult upat_do_process_and(UOp* a, UOp** out_result) {
     // too big to compile
     if (or_count >= 4) return PM_COMPILE_ERROR;
     
-    // one or clause max
+    // one or clause max: if more than one, expand product of ORs
+    UOp* combined_or = NULL;
     if (or_count > 1) {
-        // need the product of the or clauses
-        // NOTE: This is a simplification - product would be more complex
+        combined_or = or_product(or_clauses, or_count);
+        if (!combined_or) { free(new_src); free(or_clauses); return PM_COMPILE_ERROR; }
         found = true;
-        // For now, just use the first or clause
-        if (new_src_count < new_src_capacity) {
-            new_src[new_src_count++] = or_clauses[0];
-        } else {
-            free(new_src);
-            free(or_clauses);
-            return PM_COMPILE_ERROR;
-        }
     } else if (or_count == 1) {
-        if (new_src_count < new_src_capacity) {
-            new_src[new_src_count++] = or_clauses[0];
+        combined_or = or_clauses[0];
+    }
+
+    // Handle stores
+    // Partition new_src into stores and others
+    size_t stores_cap = 8, stores_cnt = 0;
+    UOp** stores = (UOp**)malloc(stores_cap * sizeof(UOp*));
+    size_t others_cap = new_src_capacity, others_cnt = 0;
+    UOp** others = (UOp**)malloc(others_cap * sizeof(UOp*));
+    if (!stores || !others) { free(new_src); free(or_clauses); free(stores); free(others); return PM_COMPILE_ERROR; }
+    for (size_t i = 0; i < new_src_count; i++) {
+        UOp* x = new_src[i];
+        if (is_store(x)) {
+            if (stores_cnt >= stores_cap) { stores_cap *= 2; stores = (UOp**)realloc(stores, stores_cap * sizeof(UOp*)); }
+            stores[stores_cnt++] = x;
         } else {
-            free(new_src);
-            free(or_clauses);
-            return PM_COMPILE_ERROR;
+            if (others_cnt >= others_cap) { others_cap *= 2; others = (UOp**)realloc(others, others_cap * sizeof(UOp*)); }
+            others[others_cnt++] = x;
         }
     }
-    
-    // Handle stores (simplified)
-    // In full implementation, this would handle STORE operations more carefully
-    
-    // reassemble, if there's any deduping to do, do it
-    UOp** deduped = upat_dedup(new_src, new_src_count, &new_src_count);
+
+    // If we have an OR, push stores into each AND branch under it
+    if (combined_or) {
+        // combined_or may be OR or a single OR clause
+        if (combined_or->op == OPS_OR) {
+            for (size_t i = 0; i < combined_or->src_count; i++) {
+                UOp* br = combined_or->src[i];
+                if (br->op == OPS_AND) {
+                    size_t merged_cnt = br->src_count + stores_cnt;
+                    UOp** merged = (UOp**)malloc(merged_cnt * sizeof(UOp*));
+                    memcpy(merged, br->src, br->src_count * sizeof(UOp*));
+                    memcpy(merged + br->src_count, stores, stores_cnt * sizeof(UOp*));
+                    combined_or->src[i] = mk_and(merged, merged_cnt);
+                    free(merged);
+                } else {
+                    size_t merged_cnt = 1 + stores_cnt;
+                    UOp** merged = (UOp**)malloc(merged_cnt * sizeof(UOp*));
+                    merged[0] = br;
+                    memcpy(merged + 1, stores, stores_cnt * sizeof(UOp*));
+                    combined_or->src[i] = mk_and(merged, merged_cnt);
+                    free(merged);
+                }
+            }
+        }
+        found = true;
+    } else if (stores_cnt) {
+        // No OR: deduplicate stores by variable, convert duplicates to CMPNE
+        // Map var (stores[k]->src[0]) -> value (stores[k]->src[1])
+        for (size_t i = 0; i < stores_cnt; i++) {
+            UOp* var = stores[i]->src[0];
+            UOp* val = stores[i]->src[1];
+            // search for prior var
+            bool dupe = false;
+            for (size_t j = 0; j < i; j++) {
+                if (stores[j]->src[0] == var) {
+                    // duplicate store: add CMPNE between first value and new value
+                    UOp* cmp_src[2] = { stores[j]->src[1], val };
+                    UOp* cmp = uop_new(OPS_CMPNE, dtypes.bool_, cmp_src, 2, NULL, NULL);
+                    if (others_cnt >= others_cap) { others_cap *= 2; others = (UOp**)realloc(others, others_cap * sizeof(UOp*)); }
+                    others[others_cnt++] = cmp;
+                    dupe = true;
+                    found = true;
+                    break;
+                }
+            }
+            if (!dupe) {
+                if (others_cnt >= others_cap) { others_cap *= 2; others = (UOp**)realloc(others, others_cap * sizeof(UOp*)); }
+                others[others_cnt++] = stores[i];
+            }
+        }
+    }
+
+    // Reassemble AND
+    size_t final_cap = others_cnt + (combined_or ? 1 : 0);
+    UOp** final_items = (UOp**)malloc(final_cap * sizeof(UOp*));
+    size_t fi = 0;
+    for (size_t i = 0; i < others_cnt; i++) final_items[fi++] = others[i];
+    if (combined_or) final_items[fi++] = combined_or;
+
+    // dedup
+    UOp** deduped = upat_dedup(final_items, fi, &fi);
     free(new_src);
-    new_src = deduped;
+    free(final_items);
+    free(or_clauses);
+    free(others);
+    free(stores);
     
-    found = (new_src_count < new_src_capacity || new_src_count > 0);  // Simplified
-    
-    if (found) {
-        *out_result = uop_new(OPS_AND, dtypes.void_, new_src, new_src_count, NULL, NULL);
+    if (deduped) {
+        *out_result = mk_and(deduped, fi);
+        free(deduped);
     } else {
-        // Return original if no changes
         *out_result = uop_ref(a);
     }
-    
-    free(new_src);
-    free(or_clauses);
     
     return PM_OK;
 }
@@ -374,14 +632,188 @@ static UOp* wrap(void* ctx, UOp* x) {
     char var_name[32];
     sprintf(var_name, "a%ld", (long)ctx);
     
-    UOpArg noop_arg;
-    noop_arg.type = ARG_CONST;
-    noop_arg.const_data.const_value = 0.0;
-    
-    return uop_new(OPS_NOOP, dtypes.void_, NULL, 0, &noop_arg, NULL);
+    UOp* n = uop_new(OPS_NOOP, dtypes.void_, NULL, 0, NULL, NULL);
+    uop_meta_set(n, META_NOOP_STR, strdup(var_name));
+    return n;
 }
 
 PatternMatcher* pm_renderer = NULL;  // Will be initialized later
+
+static const char* get_noop_str(UOp* n) {
+    if (!n) return NULL;
+    return (const char*)uop_meta_get(n, META_NOOP_STR);
+}
+
+static char* str_printf(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    char buf[1024];
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    return strdup(buf);
+}
+
+static char* str_format_template(const char* fmt, const char** args, size_t nargs) {
+    // Replace occurrences of {i} with args[i]
+    if (!fmt) return NULL;
+    size_t cap = strlen(fmt) + 1;
+    char* out = (char*)malloc(cap);
+    out[0] = '\0';
+    const char* p = fmt;
+    while (*p) {
+        if (*p == '{') {
+            const char* q = strchr(p, '}');
+            if (q) {
+                int idx = atoi(p+1);
+                const char* rep = (idx >= 0 && (size_t)idx < nargs && args[idx]) ? args[idx] : "";
+                size_t need = strlen(out) + strlen(rep) + 1;
+                if (need > cap) { cap = need * 2; out = (char*)realloc(out, cap); }
+                strcat(out, rep);
+                p = q + 1;
+                continue;
+            }
+        }
+        // append single char
+        size_t len = strlen(out);
+        if (len + 2 > cap) { cap *= 2; out = (char*)realloc(out, cap); }
+        out[len] = *p; out[len+1] = '\0';
+        p++;
+    }
+    return out;
+}
+
+// Renderer walk: apply rules on a copy tree
+UOp* upat_renderer_walk(UOp* node, int* bind_counter) {
+    if (!node) return NULL;
+    // Recurse first
+    for (size_t i=0;i<node->src_count;i++) {
+        node->src[i] = upat_renderer_walk(node->src[i], bind_counter);
+    }
+    
+    if (node->op == OPS_BIND) {
+        // Replace with NOOP "aN"
+        char label[32]; snprintf(label, sizeof(label), "a%d", *bind_counter);
+        (*bind_counter)++;
+        UOp* n = uop_new(OPS_NOOP, dtypes.void_, NULL, 0, NULL, NULL);
+        uop_meta_set(n, META_NOOP_STR, strdup(label));
+        uop_unref(node);
+        return n;
+    }
+    
+    if (node->op == OPS_CMPNE) {
+        // Replace with CUSTOM "{0} is {1}"
+        UOp* c = uop_new(OPS_CUSTOM, dtypes.bool_, node->src, node->src_count, NULL, NULL);
+        uop_meta_set(c, META_CUSTOM_FMT, strdup("{0} is {1}"));
+        // Prevent double free: detach children from old node
+        node->src = NULL; node->src_count = 0;
+        uop_unref(node);
+        return c;
+    }
+    
+    if (node->op == OPS_RANGE && node->src_count >= 1) {
+        UOp* a = node->src[0];
+        bool all_noop = (a->op == OPS_AND);
+        if (all_noop) {
+            for (size_t i=0;i<a->src_count;i++) if (a->src[i]->op != OPS_NOOP) { all_noop=false; break; }
+        }
+        if (all_noop) {
+            // Build cond string
+            size_t cond_cap = 16; char* cond = (char*)malloc(cond_cap); cond[0]='\0';
+            for (size_t i=0;i<a->src_count;i++) {
+                const char* s = get_noop_str(a->src[i]); if (!s) s = "";
+                size_t need = strlen(cond) + strlen(s) + 6;
+                if (need > cond_cap) { cond_cap = need*2; cond = (char*)realloc(cond, cond_cap); }
+                if (i>0) strcat(cond, " and ");
+                strcat(cond, s);
+            }
+            char* paren = str_printf("(%s)", cond); free(cond);
+            UOp* cond_noop = uop_new(OPS_NOOP, dtypes.void_, NULL, 0, NULL, NULL);
+            uop_meta_set(cond_noop, META_NOOP_STR, paren);
+            // New CUSTOM with fmt = original RANGE format
+            const char* fmt = (const char*)uop_meta_get(node, META_CUSTOM_FMT);
+            if (!fmt) fmt = "all([{0} for {1} in {2}.src])";
+            UOp** ns = (UOp**)malloc(sizeof(UOp*)*(node->src_count));
+            ns[0] = cond_noop;
+            for (size_t i=1;i<node->src_count;i++) ns[i] = node->src[i];
+            UOp* c = uop_new(OPS_CUSTOM, dtypes.bool_, ns, node->src_count, NULL, NULL);
+            uop_meta_set(c, META_CUSTOM_FMT, strdup(fmt));
+            // Detach to avoid double free
+            node->src = NULL; node->src_count = 0;
+            uop_unref(node);
+            return c;
+        }
+    }
+    
+    if (node->op == OPS_CUSTOM) {
+        // If all children are NOOP, format to NOOP
+        bool all_noop = node->src_count > 0;
+        for (size_t i=0;i<node->src_count;i++) if (node->src[i]->op != OPS_NOOP) { all_noop=false; break; }
+        if (all_noop) {
+            const char* fmt = (const char*)uop_meta_get(node, META_CUSTOM_FMT);
+            const char** args = (const char**)malloc(sizeof(char*)*node->src_count);
+            for (size_t i=0;i<node->src_count;i++) args[i] = get_noop_str(node->src[i]);
+            char* s = str_format_template(fmt?fmt:"", args, node->src_count);
+            free(args);
+            UOp* n = uop_new(OPS_NOOP, dtypes.void_, NULL, 0, NULL, NULL);
+            uop_meta_set(n, META_NOOP_STR, s);
+            uop_unref(node);
+            return n;
+        } else if (node->src_count == 0) {
+            // CUSTOM with zero children → NOOP of fmt
+            const char* fmt = (const char*)uop_meta_get(node, META_CUSTOM_FMT);
+            UOp* n = uop_new(OPS_NOOP, dtypes.void_, NULL, 0, NULL, NULL);
+            uop_meta_set(n, META_NOOP_STR, strdup(fmt?fmt:""));
+            uop_unref(node);
+            return n;
+        }
+    }
+    
+    if (node->op == OPS_GEP && node->src_count == 1 && node->src[0]->op == OPS_NOOP && node->arg.type == ARG_REDUCE && node->arg.reduce_data.axes_count >= 1) {
+        const char* base = get_noop_str(node->src[0]); if (!base) base = "";
+        int idx = node->arg.reduce_data.axes[0];
+        char* s = str_printf("%s.src[%d]", base, idx);
+        UOp* n = uop_new(OPS_NOOP, dtypes.void_, NULL, 0, NULL, NULL);
+        uop_meta_set(n, META_NOOP_STR, s);
+        uop_unref(node);
+        return n;
+    }
+    
+    return node;
+}
+
+// Graph rewrite: apply processor or renderer over the tree
+static UOp* upat_rewrite_process(UOp* node, bool* changed) {
+    if (!node) return NULL;
+    // rewrite children first
+    for (size_t i=0;i<node->src_count;i++) {
+        UOp* newc = upat_rewrite_process(node->src[i], changed);
+        node->src[i] = newc;
+    }
+    if (node->op == OPS_AND) {
+        UOp* out = NULL;
+        if (upat_do_process_and(node, &out) == PM_OK && out && out != node) {
+            *changed = true;
+            return out;
+        }
+    }
+    return node;
+}
+
+UOp* upat_graph_rewrite(UOp* root, PatternMatcher* pm, const char* name) {
+    (void)name;
+    if (!root) return NULL;
+    if (pm == pm_renderer) {
+        int bind_counter = 0;
+        return upat_renderer_walk(root, &bind_counter);
+    }
+    if (pm == pm_proc) {
+        bool changed=false;
+        UOp* out = upat_rewrite_process(root, &changed);
+        return out;
+    }
+    // default: no-op
+    return root;
+}
 
 char* upat_final_render(UOp* x, bool has_ctx, int depth) {
     if (!x) return NULL;
@@ -618,6 +1050,7 @@ char* upat_get_code(UPat* self, bool has_ctx) {
     // Create base noop node
     UOpArg noop_arg = {0};
     UOp* base = uop_new(OPS_NOOP, dtypes.void_, NULL, 0, &noop_arg, NULL);
+    uop_meta_set(base, META_NOOP_STR, strdup("uop"));
     if (!base) return NULL;
     
     UOp* ret = upat_get_clause(self, base, 0);
@@ -634,22 +1067,15 @@ char* upat_get_code(UPat* self, bool has_ctx) {
         (void)0; // Context tracking placeholder
         
         // Use wrap and max_val functions to avoid unused warnings
-        UOp* wrapped_test = wrap((void*)1, ret);
-        if (wrapped_test) uop_unref(wrapped_test);
-        size_t max_test = max_val(10, 20);
-        if (max_test > 1000000) return NULL; // Never happens, but uses max_val
-        
-        UOp* processed = NULL;
-        PatternMatcherResult proc_result = upat_do_process_and(ret, &processed);
-        if (proc_result != PM_OK) {
-            goto cleanup;
-        }
-        
-        // Simplified - this would use graph_rewrite in full implementation
-        UOp* out = processed;  // Simplified - would use pm_renderer
+        // Process pass via graph_rewrite
+        UOp* processed = upat_graph_rewrite(ret, pm_proc, "process UPat");
+        if (!processed) goto cleanup;
+        // Renderer pass via graph_rewrite
+        UOp* out = upat_graph_rewrite(processed, pm_renderer, "compile UPat");
+        uop_unref(processed);
         
         char* rendered = upat_final_render(out, has_ctx, 1);
-        uop_unref(processed);
+        uop_unref(out);
         
         if (!rendered) {
             goto cleanup;
@@ -756,9 +1182,107 @@ void upat_free(UPat* pat) {
         }
         free(pat->src);
     }
+    if (pat->op_list) free(pat->op_list);
+    if (pat->dtype_list) free((void*)pat->dtype_list);
+    if (pat->fork_group_sizes) free(pat->fork_group_sizes);
     
     if (pat->name) free((void*)pat->name);  // Cast away const
+    if (pat->has_arg_bind && pat->arg_bind_str) free((void*)pat->arg_bind_str);
     free(pat);
+}
+
+// ===== UPat pattern construction helpers =====
+void upat_set_name(UPat* pat, const char* name) {
+    if (!pat) return;
+    if (pat->name) free((void*)pat->name);
+    pat->name = name ? strdup(name) : NULL;
+}
+
+void upat_set_required_len(UPat* pat, int required_len, bool strict) {
+    if (!pat) return;
+    pat->required_len = required_len;
+    pat->strict_length = strict;
+}
+
+void upat_set_dtype(UPat* pat, const DType* dtype) {
+    if (!pat) return;
+    pat->dtype = (void*)dtype;
+}
+
+void upat_set_op_list(UPat* pat, const Ops* ops, size_t count) {
+    if (!pat) return;
+    if (pat->op_list) { free(pat->op_list); pat->op_list=NULL; pat->op_list_count=0; }
+    if (ops && count>0) {
+        pat->op_list = (Ops*)malloc(sizeof(Ops)*count);
+        memcpy(pat->op_list, ops, sizeof(Ops)*count);
+        pat->op_list_count = count;
+    }
+}
+
+void upat_set_dtype_list(UPat* pat, const DType* const* dts, size_t count) {
+    if (!pat) return;
+    if (pat->dtype_list) { free((void*)pat->dtype_list); pat->dtype_list=NULL; pat->dtype_list_count=0; }
+    if (dts && count>0) {
+        const DType** arr = (const DType**)malloc(sizeof(DType*)*count);
+        for (size_t i=0;i<count;i++) arr[i]=dts[i];
+        pat->dtype_list = arr;
+        pat->dtype_list_count = count;
+    }
+}
+
+void upat_set_arg_int(UPat* pat, int value) {
+    if (!pat) return;
+    pat->has_int_arg = true;
+    pat->arg_int = value;
+}
+
+void upat_set_arg_bind(UPat* pat, const char* bind_name) {
+    if (!pat) return;
+    if (pat->arg_bind_str) free((void*)pat->arg_bind_str);
+    pat->has_int_arg = false;
+    pat->has_arg_bind = bind_name != NULL;
+    pat->arg_bind_str = bind_name ? strdup(bind_name) : NULL;
+}
+
+void upat_set_src(UPat* pat, UPat** src, size_t count) {
+    if (!pat) return;
+    if (pat->src) { for (size_t i=0;i<pat->src_count;i++) upat_free(pat->src[i]); free(pat->src); }
+    pat->src = NULL; pat->src_count=0;
+    pat->src_is_repeat = false; pat->src_is_fork=false;
+    if (src && count>0) {
+        pat->src = (UPat**)malloc(sizeof(UPat*)*count);
+        for (size_t i=0;i<count;i++) pat->src[i]=src[i];
+        pat->src_count = count;
+    }
+}
+
+void upat_set_repeat(UPat* pat, UPat* repeated) {
+    if (!pat) return;
+    if (pat->src) { for (size_t i=0;i<pat->src_count;i++) upat_free(pat->src[i]); free(pat->src); }
+    pat->src = (UPat**)malloc(sizeof(UPat*));
+    pat->src[0] = repeated;
+    pat->src_count = 1;
+    pat->src_is_repeat = true;
+    pat->src_is_fork = false;
+}
+
+void upat_set_fork(UPat* pat, UPat*** groups, const int* group_sizes, size_t group_count) {
+    if (!pat) return;
+    // Flatten groups into src array
+    size_t total = 0; for (size_t g=0; g<group_count; g++) total += (size_t)group_sizes[g];
+    if (pat->src) { for (size_t i=0;i<pat->src_count;i++) upat_free(pat->src[i]); free(pat->src); }
+    if (pat->fork_group_sizes) { free(pat->fork_group_sizes); }
+    pat->src = (UPat**)malloc(sizeof(UPat*)*total);
+    size_t off=0;
+    for (size_t g=0; g<group_count; g++) {
+        for (int i=0;i<group_sizes[g]; i++) pat->src[off++] = groups[g][i];
+    }
+    pat->src_count = total;
+    pat->src_is_fork = true;
+    pat->src_is_repeat = false;
+    pat->fork_group_count = group_count;
+    pat->fork_group_sizes = (int*)malloc(sizeof(int)*group_count);
+    for (size_t g=0; g<group_count; g++) pat->fork_group_sizes[g] = group_sizes[g];
 }
 
 // Module initialization

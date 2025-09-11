@@ -17,6 +17,62 @@
 #define MATH_PI 3.14159265358979323846
 #define MATH_E 2.71828182845904523536
 
+// 190 bits of 2/pi used by Payne–Hanek reduction (32-bit words)
+static const uint32_t TWO_OVER_PI_F[7] = {
+    0x00000000u, 0x28be60dbu, 0x9391054au, 0x7f09d5f4u, 0x7d4d3770u, 0x36d8a566u, 0x4f10e410u
+};
+
+// Helper for Payne–Hanek: select TWO_OVER_PI_F[i + offset] via chained where over dynamic i
+static UOp* ph_take(UOp* i_uop, int offset, DType i_dtype, DType u32v) {
+    UOp* an = uop_const(u32v, 0.0);
+    int max_k = (int)(sizeof(TWO_OVER_PI_F)/sizeof(TWO_OVER_PI_F[0])) - 1 - offset; // skip last per reference code
+    for (int k = max_k - 1; k >= 0; --k) {
+        UOp* cond = uop_cmpne(i_uop, uop_const(i_dtype, (double)k));
+        UOp* val = uop_const(u32v, (double)TWO_OVER_PI_F[k + offset]);
+        an = uop_where(cond, an, val);
+    }
+    return an;
+}
+
+// Helper for Cody–Waite: dtype-specific remainder reconstruction
+static UOp* cw_reduce(UOp* x, UOp* q, UOp* qdh) {
+    DType sc = dtype_scalar(&x->dtype);
+    if (dtype_eq(&sc, &dtypes.float64)) {
+        // Double-precision split of PI
+        const double PI_A = 3.1415926218032836914;
+        const double PI_B = 3.1786509424591713469e-08;
+        const double PI_C = 1.2246467864107188502e-16;
+        const double PI_D = 1.2736634327021899816e-24;
+
+        UOp* d0 = uop_add(uop_mul(qdh, uop_const(x->dtype, -PI_A)), x);
+        UOp* d1 = uop_add(uop_mul(q,   uop_const(x->dtype, -PI_A)), d0);
+        UOp* d2 = uop_add(uop_mul(qdh, uop_const(x->dtype, -PI_B)), d1);
+        UOp* d3 = uop_add(uop_mul(q,   uop_const(x->dtype, -PI_B)), d2);
+        UOp* d4 = uop_add(uop_mul(qdh, uop_const(x->dtype, -PI_C)), d3);
+        UOp* d5 = uop_add(uop_mul(q,   uop_const(x->dtype, -PI_C)), d4);
+        UOp* qdh_q = uop_add(qdh, q);
+        UOp* d6 = uop_add(uop_mul(qdh_q, uop_const(x->dtype, -PI_D)), d5);
+        return d6;
+    } else if (dtype_eq(&sc, &dtypes.float16)) {
+        // Compute in float32 for FP16 precision, then cast back
+        UOp* x32 = uop_cast_vec(x, dtypes.float32, x->dtype.count);
+        UOp* q32 = uop_cast_vec(q, dtypes.float32, q->dtype.count);
+        UOp* r32 = cw_reduce(x32, q32, NULL);
+        return uop_cast_vec(r32, dtypes.float16, x->dtype.count);
+    } else {
+        // Single-precision path
+        const double C0 = -3.1414794921875;
+        const double C1 = -0.00011315941810607910156;
+        const double C2 = -1.9841872589410058936e-09;
+        const double C3 = -1.2154201256553420762e-10;
+        UOp* d0 = uop_add(uop_mul(q, uop_const(x->dtype, C0)), x);
+        UOp* d1 = uop_add(uop_mul(q, uop_const(x->dtype, C1)), d0);
+        UOp* d2 = uop_add(uop_mul(q, uop_const(x->dtype, C2)), d1);
+        UOp* d3 = uop_add(uop_mul(q, uop_const(x->dtype, C3)), d2);
+        return d3;
+    }
+}
+
 // *** helper functions for bit manipulation ***
 
 int transcendental_mantissa_bits(DType* d) {
@@ -48,14 +104,23 @@ int transcendental_exponent_mask(DType* d) {
 
 // **** utils ****
 
+// integer shift helpers: operate on integer UOps using bit shifts
 UOp* transcendental_shr(UOp* x, int y) {
-    // x // (2**y)
-    return uop_div(x, uop_const(x->dtype, pow(2.0, y)));
+    return uop_shr(x, uop_const(x->dtype, (double)y));
 }
 
 UOp* transcendental_shl(UOp* x, int y) {
-    // x * (2**y)
-    return uop_mul(x, uop_const(x->dtype, pow(2.0, y)));
+    return uop_shl(x, uop_const(x->dtype, (double)y));
+}
+
+// Horner polynomial evaluation for UOps
+static UOp* transcendental_polyN(UOp* x, const double* coeffs, int n) {
+    if (n <= 0) return uop_const(x->dtype, 0.0);
+    UOp* acc = uop_const(x->dtype, coeffs[n-1]);
+    for (int i = n-2; i >= 0; --i) {
+        acc = uop_add(uop_mul(acc, x), uop_const(x->dtype, coeffs[i]));
+    }
+    return acc;
 }
 
 UOp* transcendental_rintk(UOp* d) {
@@ -102,7 +167,7 @@ UOp* transcendental_pow2if(UOp* q, const DType* float_scalar) {
     }
     
     // shl(q + exponent_bias(out_dtype), mantissa_bits(out_dtype)).bitcast(out_dtype)
-    UOp* bias = uop_const(q->dtype, transcendental_exponent_bias(&out_dtype));
+    UOp* bias = uop_const(q->dtype, (double)transcendental_exponent_bias(&out_dtype));
     UOp* sum = uop_add(q, bias);
     UOp* shifted = transcendental_shl(sum, transcendental_mantissa_bits(&out_dtype));
     return uop_bitcast(shifted, out_dtype);
@@ -136,8 +201,8 @@ UOp* transcendental_ilogb2k(UOp* d) {
     // -1 <= ilog2bk(d) <= 128
     // (shr(dint, mantissa_bits(d.dtype)) & exponent_mask(d.dtype)) - exponent_bias(d.dtype)
     UOp* mantissa_shift_result = transcendental_shr(dint, transcendental_mantissa_bits(&d->dtype));
-    UOp* masked = uop_and(mantissa_shift_result, uop_const(dint->dtype, transcendental_exponent_mask(&d->dtype)));
-    UOp* bias = uop_const(dint->dtype, transcendental_exponent_bias(&d->dtype));
+    UOp* masked = uop_and(mantissa_shift_result, uop_const(dint->dtype, (double)transcendental_exponent_mask(&d->dtype)));
+    UOp* bias = uop_const(dint->dtype, (double)transcendental_exponent_bias(&d->dtype));
     return uop_sub(masked, bias);
 }
 
@@ -245,18 +310,18 @@ UOp** transcendental_frexp(UOp* v, UOp** mantissa, UOp** exponent) {
 
     // exponent = shr(bits, mantissa_bits(v.dtype)) & exponent_mask(v.dtype)
     UOp* shr_result = transcendental_shr(bits, transcendental_mantissa_bits(&v->dtype));
-    UOp* exponent_mask_val = uop_const(bits->dtype, transcendental_exponent_mask(&v->dtype));
+    UOp* exponent_mask_val = uop_const(bits->dtype, (double)transcendental_exponent_mask(&v->dtype));
     *exponent = uop_and(shr_result, exponent_mask_val);
 
     // mantissa = ((bits & m1) | m2).bitcast(v.dtype)
-    UOp* m1_const = uop_const(bits->dtype, m1);
+    UOp* m1_const = uop_const(bits->dtype, (double)m1);
     UOp* masked_and = uop_and(bits, m1_const);
-    UOp* m2_const = uop_const(bits->dtype, m2);
+    UOp* m2_const = uop_const(bits->dtype, (double)m2);
     UOp* masked_or = uop_or(masked_and, m2_const);
     *mantissa = uop_bitcast(masked_or, v->dtype);
 
     // exp = exponent - exponent_bias(v.dtype) + 1
-    UOp* bias = uop_const((*exponent)->dtype, transcendental_exponent_bias(&v->dtype));
+    UOp* bias = uop_const((*exponent)->dtype, (double)transcendental_exponent_bias(&v->dtype));
     UOp* bias_sub = uop_sub(*exponent, bias);
     UOp* one = uop_const(bias_sub->dtype, 1.0);
     *exponent = uop_add(bias_sub, one);
@@ -267,53 +332,116 @@ UOp** transcendental_frexp(UOp* v, UOp** mantissa, UOp** exponent) {
 // *** reduction algorithms for sine ***
 
 UOp** transcendental_payne_hanek_reduction(UOp* d, UOp** r_result, UOp** q_result) {
-    // Performs Payne-Hanek Reduction: computes the remainder of `d` modulo pi/2 for the values `d` where
-    //   39800.0 <= d <= +Inf
-    // Returns a tuple of `(r, q)`:
-    // - `r`[d.dtype] is the reminder value corresponding to `round_to_nearest(x % pi/2)`.
-    // - `q`[int32] is an integer, and q % 4 is corresponding to the quadrant of the original angle `d`.
-    {
-        DType sc = dtype_scalar(&d->dtype);
-        if (!dtype_eq(&sc, &dtypes.float16) && !dtype_eq(&sc, &dtypes.float32) && !dtype_eq(&sc, &dtypes.float64)) {
-        return NULL;
-        }
-    }
-    
-    *r_result = NULL;
-    *q_result = NULL;
-    
-    // NOTE: Payne-Hanek reduction is very complex to port faithfully in C due to nested functions
-    // This is a simplified version that captures the essence but not the full precision
-    
-    // For now, create simplified constants for the algorithm
-    *q_result = uop_const(dtype_vec(&dtypes.int32, d->dtype.count), 1);
-    *r_result = uop_const(d->dtype, 0.1);  // Simplified remainder
-    
-    return r_result;
-}
-
-UOp** transcendental_cody_waite_reduction(UOp* d, UOp** r_result, UOp** q_result) {
-    // Performs Cody-Waite Reduction: computes the reminder of `d` modulo pi/2 for the values `d` where
-    //     0 <= abs(d) <= 39800.0
-    // Returns a tuple of `(r, q)`, where the output format is the same as that of `payne_hanek_reduction`.
-    
+    // Performs Payne-Hanek Reduction for 39800.0 <= d <= +Inf
     {
         DType sc = dtype_scalar(&d->dtype);
         if (!dtype_eq(&sc, &dtypes.float16) && !dtype_eq(&sc, &dtypes.float32) && !dtype_eq(&sc, &dtypes.float64)) return NULL;
     }
-    
+
     *r_result = NULL;
     *q_result = NULL;
+
+    // intermediate dtype: float32 if base scalar is float16, else same as d
+    DType scb = dtype_scalar(&d->dtype);
+    DType intermediate_dtype = dtype_eq(&scb, &dtypes.float16) ? dtype_vec(&dtypes.float32, d->dtype.count) : d->dtype;
+
+    // f, e = frexp(d)
+    UOp *f = NULL, *e = NULL;
+    transcendental_frexp(d, &f, &e);
+
+    // ia = (f.cast(intermediate_dtype) * 2**32).cast_vec(uint64)
+    UOp* f_inter = uop_cast(f, intermediate_dtype);
+    UOp* ia_f = uop_mul(f_inter, uop_const(intermediate_dtype, 4294967296.0));
+    UOp* ia = uop_cast_vec(ia_f, dtypes.uint64, d->dtype.count);
+
+    // i = shr(e.cast_vec(uint64), 5)
+    UOp* e_u64 = uop_cast_vec(e, dtypes.uint64, d->dtype.count);
+    UOp* i_uop = transcendental_shr(e_u64, 5);
+
+    // e = e.cast_vec(int32) & 31; offset_uop = 32 - e
+    UOp* e_i32 = uop_and(uop_cast_vec(e, dtypes.int32, d->dtype.count), uop_const(dtype_vec(&dtypes.int32, d->dtype.count), 31));
+    UOp* offset_uop = uop_sub(uop_const(dtype_vec(&dtypes.int32, d->dtype.count), 32.0), e_i32);
+
+    // _take: an = two_over_pi_f[i + offset] via chained where over i
+    DType u32v = dtype_vec(&dtypes.uint32, d->dtype.count);
+    DType u64v = dtype_vec(&dtypes.uint64, d->dtype.count);
+    DType i_dtype = i_uop->dtype;
     
-    // Simplified Cody-Waite reduction
-    float m_1_pi = 0.318309886183790671537767526745028724;
-    
-    UOp* pi_mul = uop_mul(d, uop_const(d->dtype, m_1_pi));
-    UOp* quadrant_op = transcendental_rintk(pi_mul);
-    
-    *q_result = uop_cast(quadrant_op, dtype_vec(&dtypes.int32, d->dtype.count));
-    *r_result = uop_const(d->dtype, fmod(1.0, MATH_PI/2));
-    
+    UOp* a0 = ph_take(i_uop, 0, i_dtype, u32v);
+    UOp* a1 = ph_take(i_uop, 1, i_dtype, u32v);
+    UOp* a2 = ph_take(i_uop, 2, i_dtype, u32v);
+    UOp* a3 = ph_take(i_uop, 3, i_dtype, u32v);
+
+    // _shl_lazy/_shr_lazy helpers
+    // _shl_lazy(x, e): (x.cast_vec(uint64) * pow2if(e, d.dtype).cast_vec(uint64)).cast_vec(uint32)
+    // _shr_lazy(x, off): (x.cast_vec(uint64) // pow2if(off, d.dtype).cast_vec(uint64)).cast_vec(uint32)
+    UOp* pow_e = transcendental_pow2if(e_i32, &scb);
+    UOp* pow_off = transcendental_pow2if(offset_uop, &scb);
+    UOp* hi_l = uop_cast_vec(uop_mul(uop_cast_vec(a0, dtypes.uint64, d->dtype.count), uop_cast_vec(pow_e, dtypes.uint64, d->dtype.count)), dtypes.uint32, d->dtype.count);
+    UOp* mi_l = uop_cast_vec(uop_mul(uop_cast_vec(a1, dtypes.uint64, d->dtype.count), uop_cast_vec(pow_e, dtypes.uint64, d->dtype.count)), dtypes.uint32, d->dtype.count);
+    UOp* lo_l = uop_cast_vec(uop_mul(uop_cast_vec(a2, dtypes.uint64, d->dtype.count), uop_cast_vec(pow_e, dtypes.uint64, d->dtype.count)), dtypes.uint32, d->dtype.count);
+
+    // divisions
+    UOp* hi = uop_or(hi_l, uop_cast_vec(uop_div(uop_cast_vec(a1, dtypes.uint64, d->dtype.count), uop_cast_vec(pow_off, dtypes.uint64, d->dtype.count)), dtypes.uint32, d->dtype.count));
+    UOp* mi = uop_or(mi_l, uop_cast_vec(uop_div(uop_cast_vec(a2, dtypes.uint64, d->dtype.count), uop_cast_vec(pow_off, dtypes.uint64, d->dtype.count)), dtypes.uint32, d->dtype.count));
+    UOp* lo = uop_or(lo_l, uop_cast_vec(uop_div(uop_cast_vec(a3, dtypes.uint64, d->dtype.count), uop_cast_vec(pow_off, dtypes.uint64, d->dtype.count)), dtypes.uint32, d->dtype.count));
+
+    // compute p = (ia*hi << 32) + (ia*mi) + (ia*lo >> 32)
+    UOp* ia_hi = uop_mul(ia, uop_cast_vec(hi, dtypes.uint64, d->dtype.count));
+    UOp* ia_mi = uop_mul(ia, uop_cast_vec(mi, dtypes.uint64, d->dtype.count));
+    UOp* ia_lo = uop_mul(ia, uop_cast_vec(lo, dtypes.uint64, d->dtype.count));
+
+    UOp* p = uop_add(transcendental_shl(ia_hi, 32), uop_add(ia_mi, transcendental_shr(ia_lo, 32)));
+
+    // q = (p >> 62).cast_vec(int32)
+    UOp* quadrant = uop_cast_vec(transcendental_shr(p, 62), dtypes.int32, d->dtype.count);
+    // p = p & 0x3fffffffffffffff
+    UOp* p_masked = uop_and(p, uop_const(u64v, 4611686018427387903.0));
+    // r = (p.cast(intermediate_dtype) * 3.4061215800865545e-19).cast(d.dtype)
+    UOp* r = uop_cast(uop_mul(uop_cast(p_masked, intermediate_dtype), uop_const(intermediate_dtype, 3.4061215800865545e-19)), d->dtype);
+
+    // if f >= 0.5, adjust r -= pi/2, q += 1
+    UOp* cond = uop_lt(f, uop_const(f->dtype, 0.5));
+    UOp* r_adj = uop_sub(r, uop_const(d->dtype, MATH_PI/2.0));
+    UOp* q_inc = uop_add(quadrant, uop_const(quadrant->dtype, 1.0));
+    *r_result = uop_where(cond, r, r_adj);
+    *q_result = uop_where(cond, quadrant, q_inc);
+    return r_result;
+}
+
+UOp** transcendental_cody_waite_reduction(UOp* d, UOp** r_result, UOp** q_result) {
+    // Performs Cody-Waite Reduction: computes the remainder of `d` modulo pi/2 for 0 <= abs(d) <= 39800.0
+    {
+        DType sc = dtype_scalar(&d->dtype);
+        if (!dtype_eq(&sc, &dtypes.float16) && !dtype_eq(&sc, &dtypes.float32) && !dtype_eq(&sc, &dtypes.float64)) return NULL;
+    }
+
+    *r_result = NULL;
+    *q_result = NULL;
+
+    // Compute qdh and quadrant as in reference
+
+    const double m_1_pi = 0.318309886183790671537767526745028724;
+    const double two_pow_24 = 16777216.0; // 2**24
+
+    // qdh = (d * (m_1_pi / 2**24)).cast_vec(int64).cast(d.dtype) * (2**24)
+    UOp* scaled = uop_mul(d, uop_const(d->dtype, m_1_pi / two_pow_24));
+    UOp* qdh_i64 = uop_cast_vec(scaled, dtypes.int64, d->dtype.count);
+    UOp* qdh_f = uop_cast(qdh_i64, d->dtype);
+    UOp* qdh = uop_mul(qdh_f, uop_const(d->dtype, two_pow_24));
+
+    // quadrant rounding
+    DType scb = dtype_scalar(&d->dtype);
+    UOp* quadrant;
+    if (dtype_eq(&scb, &dtypes.float64)) {
+        quadrant = transcendental_rintk(uop_sub(uop_mul(d, uop_const(d->dtype, m_1_pi)), qdh));
+    } else {
+        quadrant = transcendental_rintk(uop_mul(d, uop_const(d->dtype, m_1_pi)));
+    }
+
+    UOp* q_cast = uop_cast(quadrant, d->dtype);
+    *r_result = cw_reduce(d, q_cast, qdh);
+    *q_result = uop_cast_vec(quadrant, dtypes.int32, d->dtype.count);
     return r_result;
 }
 
@@ -393,266 +521,143 @@ UOp* transcendental_sin_poly_large(UOp* d, UOp* q) {
 // *** toplevel functions for xsin/xlog2/xexp2 ***
 
 UOp* transcendental_lazy_map_numbers(UOp* x, UOp* inf, UOp* neg_inf, UOp* nan, UOp* ratio) {
-    /* replace inf -> inf, -inf -> _inf, nan -> nan, otherwise -> ratio */
-    // x.ne(math.inf).where(x.ne(x).where(nan, x.ne(-math.inf).where(ratio, _inf)), inf)
+    /* replace inf -> inf, -inf -> neg_inf, nan -> nan, otherwise -> ratio */
     UOp* math_inf = uop_const(x->dtype, INFINITY);
     UOp* math_neg_inf = uop_const(x->dtype, -INFINITY);
-    // UOp* math_nan = uop_const(x->dtype, NAN);
-    // Unused variable - comment out for now
-    
-    UOp* cond3 = uop_cmpne(x, math_neg_inf);
-    UOp* val3 = uop_where(cond3, ratio, neg_inf);
-    UOp* cond2 = uop_cmpne(x, x);  // x.ne(x) checks for nan
-    UOp* val2 = uop_where(cond2, nan, val3);
-    UOp* cond1 = uop_cmpne(x, math_inf);
-    UOp* val1 = uop_where(cond1, val2, inf);
-    
-    return uop_where(uop_cmpne(x, math_inf), val1, inf);
+
+    UOp* inner = uop_where(
+        uop_ne(x, x),
+        nan,
+        uop_where(uop_ne(x, math_neg_inf), ratio, neg_inf)
+    );
+    return uop_where(uop_ne(x, math_inf), inner, inf);
 }
 
 UOp* transcendental_xsin(UOp* x, bool fast, float switch_over) {
     // Implements a 1.0 ULP approximation for Ops.SIN
-    // - fast=True assumes x <= switch_over.
-    // - switch_over is the threshold for switching to payne_hanek_reduction.
-    
-    UOp* zero = uop_const(x->dtype, 0.0);
-    UOp* nan = uop_const(x->dtype, NAN);
-    
+    UOp* d = x;
+    // mask +-inf/nan as zero
+    UOp* x_masked = transcendental_lazy_map_numbers(d, uop_const(d->dtype, 0.0), uop_const(d->dtype, 0.0), uop_const(d->dtype, 0.0), d);
     // x_sign = sign(x)
-    UOp* less_zero = uop_lt(x, zero);
-    UOp* neg_one = uop_const(x->dtype, -1.0);
-    UOp* pos_one = uop_const(x->dtype, 1.0);
-    UOp* is_zero = uop_eq(x, zero);
-    UOp* x_sign = uop_where(is_zero, zero, uop_where(less_zero, neg_one, pos_one));
-    
-    // x_abs = x * x_sign
-    UOp* x_abs = uop_mul(x, x_sign);
-    
-    // Simple reduction - full Payne-Hanek and Cody-Waite would be too complex to port faithfully
-    UOp* r = uop_const(x->dtype, fmod(uop_abs(x_abs)->arg.const_data.const_value, MATH_PI/2));
-    UOp* q = transcendental_rintk(uop_div(x_abs, uop_const(x_abs->dtype, MATH_PI/2)));
-    
+    UOp* x_sign = uop_where(
+        uop_ne(x_masked, uop_const(d->dtype, 0.0)),
+        uop_where(uop_lt(x_masked, uop_const(d->dtype, 0.0)), uop_const(d->dtype, -1.0), uop_const(d->dtype, 1.0)),
+        uop_const(d->dtype, 0.0)
+    );
+    UOp* x_abs = uop_mul(x_masked, x_sign);
+
+    UOp *r = NULL, *q = NULL;
+    if (fast) transcendental_cody_waite_reduction(x_abs, &r, &q);
+    else transcendental_payne_hanek_reduction(x_abs, &r, &q);
+
     UOp* result;
     if (fast) {
         result = transcendental_sin_poly_small(r, q);
     } else {
-        result = uop_where(uop_lt(x_abs, uop_const(x_abs->dtype, switch_over)),
-            transcendental_sin_poly_small(r, q),
+        UOp *r_small = NULL, *q_small = NULL;
+        transcendental_cody_waite_reduction(x_abs, &r_small, &q_small);
+        result = uop_where(
+            uop_lt(x_abs, uop_const(d->dtype, (double)switch_over)),
+            transcendental_sin_poly_small(r_small, q_small),
             transcendental_sin_poly_large(r, q)
         );
     }
-    
-    // adjusts the sign for abs(x)
     result = uop_mul(result, x_sign);
-    
-    // sin(Inf) = NaN, sin(-Inf) = NaN, sin(NaN) = NaN
-    return transcendental_lazy_map_numbers(x, nan, nan, nan, result);
+    return transcendental_lazy_map_numbers(d, uop_const(d->dtype, NAN), uop_const(d->dtype, NAN), uop_const(d->dtype, NAN), result);
 }
 
 UOp* transcendental_xexp2(UOp* x) {
     // Implements a 1.0 ULP approximation for Ops.EXP2
-    // - Paper: https://arxiv.org/pdf/2001.09258
-    
-    // mask +=inf/nan as zero.
-    UOp* zero = uop_const(x->dtype, 0.0);
-    UOp* inf = uop_const(x->dtype, INFINITY);
-    UOp* nan = uop_const(x->dtype, NAN);
-    
-    // q = rintk(x)
-    UOp* q = transcendental_rintk(x);
-    
-    // s = d - round(d)
-    UOp* q_cast = uop_cast(q, x->dtype);
-    UOp* s = uop_sub(x, q_cast);
-    
-    // a polynomial approximation with 13 non-zero terms in the range of [−(log 2)/2,(log 2)/2].
+    UOp* d = x;
+    UOp* x_masked = transcendental_lazy_map_numbers(d, uop_const(d->dtype, 0.0), uop_const(d->dtype, 0.0), uop_const(d->dtype, 0.0), d);
+    UOp* q = transcendental_rintk(x_masked);
+    UOp* s = uop_sub(x_masked, uop_cast(q, d->dtype));
+
     UOp* u;
-    DType scalar_type = dtype_scalar(&x->dtype);
-    
-    if (dtype_eq(&scalar_type, &dtypes.float64)) {
-        u = transcendental_trig_poly(s,
-            NULL, 0,
-            (double[]){0.4434359082926529454e-9, 0.7073164598085707425e-8, 0.1017819260921760451e-6, 0.1321543872511327615e-5, 0.1525273353517584730e-4,
-                       0.1540353045101147808e-3, 0.1333355814670499073e-2, 0.9618129107597600536e-2, 0.5550410866482046596e-1, 0.2402265069591012214e+0,
-                       0.6931471805599452862e+0, 0.1000000000000000000e+1},
-            12);
+    DType sc = dtype_scalar(&d->dtype);
+    if (dtype_eq(&sc, &dtypes.float64)) {
+        const double c[] = {0.4434359082926529454e-9, 0.7073164598085707425e-8, 0.1017819260921760451e-6, 0.1321543872511327615e-5, 0.1525273353517584730e-4,
+                            0.1540353045101147808e-3, 0.1333355814670499073e-2, 0.9618129107597600536e-2, 0.5550410866482046596e-1, 0.2402265069591012214e+0,
+                            0.6931471805599452862e+0, 0.1000000000000000000e+1};
+        u = transcendental_polyN(s, c, 12);
     } else {
-        u = transcendental_trig_poly(s,
-            (double[]){0.1535920892e-3, 0.1339262701e-2, 0.9618384764e-2, 0.5550347269e-1, 0.2402264476e+0, 0.6931471825e+0, 1.0},
-            7,
-            NULL, 0);
+        const double c[] = {0.1535920892e-3, 0.1339262701e-2, 0.9618384764e-2, 0.5550347269e-1, 0.2402264476e+0, 0.6931471825e+0, 1.0};
+        u = transcendental_polyN(s, c, 7);
     }
-    
-    // u = ldexp2k(u, q) # u*2^q
+
     u = transcendental_ldexp2k(u, q);
-    
-    // upper, lower = {dtypes.float64: (1024, -2000), dtypes.float32: (128, -150), dtypes.float16: (23, -22)}[d.dtype.scalar()]
-    struct { int upper; int lower; } bounds;
-    if (dtype_eq(&scalar_type, &dtypes.float64)) {
-        bounds.upper = 1024;
-        bounds.lower = -2000;
-    } else if (dtype_eq(&scalar_type, &dtypes.float32)) {
-        bounds.upper = 128;
-        bounds.lower = -150;
-    } else {
-        bounds.upper = 23;
-        bounds.lower = -22;
-    }
-    
-    // Replace x >= upper with +inf
-    UOp* upper_bound = uop_const(x->dtype, (double)bounds.upper);
-    UOp* lower_bound = uop_const(x->dtype, (double)bounds.lower);
-    u = uop_where(uop_ge(x, upper_bound), inf, u);
-    
-    // Replace x < lower with zero.
-    u = uop_where(uop_lt(x, lower_bound), zero, u);
-    
-    // exp2(NaN) = NaN
-    return uop_where(uop_ne(x, x), nan, u);
+
+    int upper, lower;
+    if (dtype_eq(&sc, &dtypes.float64)) { upper = 1024; lower = -2000; }
+    else if (dtype_eq(&sc, &dtypes.float32)) { upper = 128; lower = -150; }
+    else { upper = 23; lower = -22; }
+
+    UOp* u2 = uop_where(uop_ge(d, uop_const(d->dtype, (double)upper)), uop_const(d->dtype, INFINITY), u);
+    u2 = uop_where(uop_lt(d, uop_const(d->dtype, (double)lower)), uop_const(d->dtype, 0.0), u2);
+    return uop_where(uop_ne(d, d), uop_const(d->dtype, NAN), u2);
 }
 
 UOp* transcendental_xlog2(UOp* x) {
     // Implements a 1.0 ULP approximation for Ops.LOG2
-    // Paper: https://arxiv.org/pdf/2001.09258 5.5
-    
-    {
-        DType sc = dtype_scalar(&x->dtype);
-        if (dtype_eq(&sc, &dtypes.float16)) {
-            return uop_cast(transcendental_xlog2(uop_cast(x, dtype_vec(&dtypes.float32, x->dtype.count))), x->dtype);
-        }
+    DType sc = dtype_scalar(&x->dtype);
+    if (dtype_eq(&sc, &dtypes.float16)) {
+        return uop_cast(transcendental_xlog2(uop_cast(x, dtype_vec(&dtypes.float32, x->dtype.count))), x->dtype);
     }
-    
-    // FLT_MIN = d.const_like(1e-6 if d.dtype.scalar() == dtypes.float16 else 1e-4)
-    DType sc2 = dtype_scalar(&x->dtype);
-    double flt_min = dtype_eq(&sc2, &dtypes.float16) ? 1e-6 : 1e-4;
-    UOp* flt_min_const = uop_const(x->dtype, flt_min);
-    UOp* is_denormal = uop_lt(x, flt_min_const);
-    
-    UOp* multiplier = uop_const(x->dtype, pow(2.0, 64));
-    UOp* a = uop_where(is_denormal, uop_mul(x, multiplier), x);
-    
-    // e = ilogb2k(a * (1.0 / 0.75)).cast(a.dtype)
-    UOp* seventy_five = uop_const(a->dtype, 0.75);
-    UOp* inverted = uop_div(uop_const(a->dtype, 1.0), seventy_five);
-    UOp* scaled = uop_mul(a, inverted);
-    UOp* e = uop_cast(transcendental_ilogb2k(scaled), a->dtype);
-    
-    // m = ldexp3k(a, -e)
-    UOp* neg_e = uop_neg(e);
-    UOp* m = transcendental_ldexp3k(a, neg_e);
-    
-    // e = is_denormal.where(e - 64, e)
-    UOp* sixty_four = uop_const(e->dtype, 64);
-    UOp* adjusted_e = uop_sub(e, sixty_four);
-    e = uop_where(is_denormal, adjusted_e, e);
-    
-    // x = (m - 1.0) / (m + 1.0)
+
+    UOp* d = x;
+    double flt_min = dtype_eq(&sc, &dtypes.float16) ? 1e-6 : 1e-4;
+    UOp* is_denormal = uop_lt(d, uop_const(d->dtype, flt_min));
+    UOp* a = uop_where(is_denormal, uop_mul(d, uop_const(d->dtype, pow(2.0, 64))), d);
+
+    UOp* e = uop_cast(transcendental_ilogb2k(uop_mul(a, uop_div(uop_const(a->dtype, 1.0), uop_const(a->dtype, 0.75)))), a->dtype);
+    UOp* m = transcendental_ldexp3k(a, uop_neg(e));
+    e = uop_where(is_denormal, uop_sub(e, uop_const(e->dtype, 64.0)), e);
+
     UOp* one = uop_const(m->dtype, 1.0);
-    UOp* m_minus_one = uop_sub(m, one);
-    UOp* m_plus_one = uop_add(m, one);
-    UOp* x_val = uop_div(m_minus_one, m_plus_one);
-    
-    // x2 = x * x
-    UOp* x2 = uop_mul(x_val, x_val);
-    
-    UOp* t, *s_hi, *s_lo;
-    DType scalar_type = dtype_scalar(&x->dtype);
-    
-    if (dtype_eq(&scalar_type, &dtypes.float64)) {
-        t = transcendental_trig_poly(x2,
-            NULL, 0,
-            (double[]){0.2211941750456081490e+0, 0.2200768693152277689e+0, 0.2623708057488514656e+0, 0.3205977477944495502e+0,
-                       0.4121985945485324709e+0, 0.5770780162997058982e+0, 0.96179669392608091449},
-            7);
-        s_hi = uop_add(e, uop_mul(x_val, uop_const(x_val->dtype, 2.885390081777926774)));
-        s_lo = uop_const(e->dtype, 0);
+    UOp* xv = uop_div(uop_sub(m, one), uop_add(m, one));
+    UOp* x2 = uop_mul(xv, xv);
+
+    UOp* t; UOp* s_hi; UOp* s_lo;
+    if (dtype_eq(&sc, &dtypes.float64)) {
+        const double c[] = {0.2211941750456081490e+0, 0.2200768693152277689e+0, 0.2623708057488514656e+0, 0.3205977477944495502e+0,
+                            0.4121985945485324709e+0, 0.5770780162997058982e+0, 0.96179669392608091449};
+        t = transcendental_polyN(x2, c, 7);
+        s_hi = uop_add(e, uop_mul(xv, uop_const(xv->dtype, 2.885390081777926774)));
+        s_lo = uop_const(e->dtype, 0.0);
     } else {
-        t = transcendental_trig_poly(x2,
-            (double[]){0.4374550283e+0, 0.5764790177e+0, 0.9618012905120},
-            3,
-            NULL, 0);
-        s_hi = uop_add(e, uop_mul(x_val, uop_const(x_val->dtype, 2.8853900432586669922)));
-        s_lo = uop_mul(x_val, uop_const(x_val->dtype, 3.2734474483568488616e-08));
+        const double c[] = {0.4374550283e+0, 0.5764790177e+0, 0.9618012905120};
+        t = transcendental_polyN(x2, c, 3);
+        s_hi = uop_add(e, uop_mul(xv, uop_const(xv->dtype, 2.8853900432586669922)));
+        s_lo = uop_mul(xv, uop_const(xv->dtype, 3.2734474483568488616e-08));
     }
-    
-    // r = t * (x * x2) + (s_hi + s_lo)
-    UOp* x_x2 = uop_mul(x_val, x2);
-    UOp* t_mult = uop_mul(t, x_x2);
-    UOp* s_sum = uop_add(s_hi, s_lo);
-    UOp* r = uop_add(t_mult, s_sum);
-    
-    // log2(Inf) = Inf
-    UOp* math_inf = uop_const(x->dtype, INFINITY);
-    r = uop_where(uop_cmpne(x, math_inf), r, math_inf);
-    
-    // log2(x) = NaN for x < 0
-    UOp* zero = uop_const(x->dtype, 0.0);
-    r = uop_where(uop_lt(x, zero), uop_const(x->dtype, NAN), r);
-    
-    // log2(0) = -Inf
-    struct { int log2_zero; } limits;
-    if (dtype_eq(&scalar_type, &dtypes.float64)) {
-        limits.log2_zero = -1087;
-    } else if (dtype_eq(&scalar_type, &dtypes.float32)) {
-        limits.log2_zero = -191;
-    } else {
-        limits.log2_zero = -79;
-    }
-    UOp* log2_zero_const = uop_const(r->dtype, (double)limits.log2_zero);
-    UOp* neg_inf_even = uop_const(r->dtype, -INFINITY);
-    r = uop_where(uop_cmpne(r, log2_zero_const), r, neg_inf_even);
-    
-    // log2(NaN) = NaN
-    r = uop_where(uop_ne(x, x), uop_const(x->dtype, NAN), r);
-    
-    // log2(-0.0) = -Inf. In certain devices like PTX, x == -0.0 won't be true. so making reciprocal.
-    UOp* neg_inf_even_reciprocal = uop_const(r->dtype, -INFINITY);
-    UOp* x_reciprocal = uop_recip(x);
-    UOp* math_neg_inf = uop_const(r->dtype, -INFINITY);
-    UOp* reciprocal_check = uop_cmpne(x_reciprocal, math_neg_inf);
-    return uop_where(reciprocal_check, r, neg_inf_even_reciprocal);
+    UOp* r = uop_add(uop_mul(t, uop_mul(xv, x2)), uop_add(s_hi, s_lo));
+
+    UOp* math_inf = uop_const(d->dtype, INFINITY);
+    r = uop_where(uop_cmpne(d, math_inf), r, math_inf);
+    r = uop_where(uop_lt(d, uop_const(d->dtype, 0.0)), uop_const(d->dtype, NAN), r);
+    int log2_zero = dtype_eq(&sc, &dtypes.float64) ? -1087 : (dtype_eq(&sc, &dtypes.float32) ? -191 : -79);
+    r = uop_where(uop_cmpne(r, uop_const(r->dtype, (double)log2_zero)), r, uop_const(r->dtype, -INFINITY));
+    r = uop_where(uop_ne(d, d), uop_const(d->dtype, NAN), r);
+    return uop_where(uop_cmpne(uop_recip(d), uop_const(r->dtype, -INFINITY)), r, uop_const(r->dtype, -INFINITY));
 }
 
 UOp* transcendental_xpow(UOp* base, UOp* exponent) {
-    // start with b ** e = exp2(e * log2(b))
-    // Fast path: positive constant base — avoid building large xlog2 graph
-    if (base && base->op == OPS_CONST) {
-        double cval = 0.0;
-        if (base->arg.type == ARG_CONST) cval = base->arg.const_data.const_value;
-        else if (base->arg.type == ARG_INT) cval = (double)base->arg.int_data.i;
-        if (cval > 0.0) {
-            UOp* k = uop_const(exponent->dtype, log2(cval));
-            UOp* mul = uop_mul(exponent, k);
-            return transcendental_xexp2(mul);
-        }
-        // fall through to general handling for cval <= 0
-    }
-
+    // b ** e = exp2(e * log2(|b|)) with negative base fixups
     UOp* base_abs = uop_where(uop_lt(base, uop_const(base->dtype, 0.0)), uop_neg(base), base);
-    UOp* log2_base = transcendental_xlog2(base_abs);
-    UOp* mul = uop_mul(exponent, log2_base);
-    UOp* ret = transcendental_xexp2(mul);
-    
+    UOp* ret = transcendental_xexp2(uop_mul(exponent, transcendental_xlog2(base_abs)));
+
     // negative base adjustment: nan for non-integer exponent and -1 for odd exponent
-    UOp* exponent_int32 = uop_cast(exponent, dtype_vec(&dtypes.int32, exponent->dtype.count));
-    UOp* exponent_diff = uop_ne(exponent, exponent_int32);
-    UOp* exponent_abs = uop_where(uop_lt(exponent, uop_const(exponent->dtype, 0.0)), uop_neg(exponent), exponent);
-    UOp* exponent_abs_int32 = uop_cast(exponent_abs, dtype_vec(&dtypes.int32, exponent_abs->dtype.count));
-    UOp* mod_two = uop_remainder(exponent_abs_int32, uop_const(exponent_abs_int32->dtype, 2));
-    UOp* bool_mod_two = uop_cmpne(mod_two, uop_const(mod_two->dtype, 0));
-    
-    UOp* nan_val = uop_const(ret->dtype, NAN);
-    UOp* neg_one = uop_const(ret->dtype, -1.0);
-    UOp* pos_one = uop_const(ret->dtype, 1.0);
-    UOp* adj = uop_where(exponent_diff, nan_val, 
-        uop_where(bool_mod_two, neg_one, pos_one));
-    
+    UOp* exponent_i32 = uop_cast(exponent, dtype_vec(&dtypes.int32, exponent->dtype.count));
+    UOp* non_int = uop_ne(exponent, exponent_i32);
+    UOp* eabs = uop_where(uop_lt(exponent, uop_const(exponent->dtype, 0.0)), uop_neg(exponent), exponent);
+    UOp* eabs_i32 = uop_cast(eabs, dtype_vec(&dtypes.int32, eabs->dtype.count));
+    UOp* odd = uop_cmpne(uop_remainder(eabs_i32, uop_const(eabs_i32->dtype, 2)), uop_const(eabs_i32->dtype, 0));
+    UOp* adj = uop_where(non_int, uop_const(ret->dtype, NAN), uop_where(odd, uop_const(ret->dtype, -1.0), uop_const(ret->dtype, 1.0)));
+
     // fix 0 ** 0 = 1
     UOp* zero = uop_const(base->dtype, 0.0);
-    UOp* one_val = uop_const(ret->dtype, 1.0);
-    UOp* base_zero_exp_zero = uop_and(uop_eq(base, zero), uop_eq(exponent, zero));
-    
-    return uop_where(base_zero_exp_zero, one_val, uop_mul(ret, uop_where(uop_lt(base, zero), adj, pos_one)));
+    UOp* ret1 = uop_mul(ret, uop_where(uop_lt(base, zero), adj, uop_const(ret->dtype, 1.0)));
+    return uop_where(uop_and(uop_eq(base, zero), uop_eq(exponent, zero)), uop_const(ret->dtype, 1.0), ret1);
 }
 
 // *** integer division ***
@@ -660,54 +665,86 @@ UOp* transcendental_xpow(UOp* base, UOp* exponent) {
 DivisionMagic transcendental_magicgu(int vmax, int d) {
     // calculate m,s such that x//d == (x*m) >> s for all 0 <= x <= vmax, d>0; adapted from Hacker's Delight, Chapter 10
     DivisionMagic result = {0, 0, false};
-    
     if (d <= 0) return result;
-    
+
     int nc = ((vmax + 1) / d) * d - 1;
     int nbits = 0;
     int temp = vmax;
-    while (temp > 0) {
-        nbits++;
-        temp >>= 1;
-    }
+    while (temp > 0) { nbits++; temp >>= 1; }
     int max_s = 2 * nbits + 1;
-    
+
     for (int s = 0; s <= max_s; s++) {
-        if (pow(2.0, s) > nc * (d - 1 - (((int)pow(2.0, s) - 1) % d))) {
-            int m = ((int)pow(2.0, s) + d - 1 - ((int)pow(2.0, s) - 1) % d) / d;
+        unsigned __int128 two_s = ((unsigned __int128)1) << s;
+        unsigned __int128 lhs = two_s;
+        unsigned __int128 rhs = (unsigned __int128)nc * (unsigned __int128)(d - 1 - (int)(((two_s - 1) % d)));
+        if (lhs > rhs) {
+            int m = (int)((two_s + d - 1 - (int)((two_s - 1) % d)) / d);
             result.magic = m;
             result.shift = s;
             result.valid = true;
             return result;
         }
     }
-    
     return result;
+}
+
+// local helper: unsigned variant of an integer dtype (same bitwidth)
+static const DType* unsigned_variant(const DType* dt) {
+    if (dtype_eq(dt, &dtypes.int8)) return &dtypes.uint8;
+    if (dtype_eq(dt, &dtypes.int16)) return &dtypes.uint16;
+    if (dtype_eq(dt, &dtypes.int32)) return &dtypes.uint32;
+    if (dtype_eq(dt, &dtypes.int64)) return &dtypes.uint64;
+    if (dtypes_is_unsigned(dt)) return dt;
+    return dt; // fallback
+}
+
+static bool device_supports_dtype(const char* device, const DType* dt) {
+    (void)device; // CPU backend: support integer types
+    return dtypes_is_int(dt);
 }
 
 UOp* transcendental_fast_idiv(const char* device, UOp* x, int d) {
     // idiv is truncated division, but arithmetic shift is floored division, so can only do non-negative numbers!
-    // NOTE: vmin/vmax checking is not fully implemented in current UOp system
-    if (/* x.vmin < 0 */ false) return NULL;
-    
-    // Sign variable removed - was set but not used
-    if (d < 0) {
-        d = -d;
+    if (x->vmin_vmax_valid && x->vmin < 0) return NULL;
+
+    int sign = d > 0 ? 1 : -1;
+    int ad = d >= 0 ? d : -d;
+
+    // vmax := min(x.vmax, dtypes.max(x.dtype))
+    long long vmax;
+    double dtype_max = dtypes_max(&x->dtype);
+    if (x->vmin_vmax_valid) {
+        vmax = (long long)x->vmax;
+        if ((double)vmax > dtype_max) vmax = (long long)dtype_max;
+    } else {
+        vmax = (long long)dtype_max;
     }
-    
-    // vmax checking would require analyzing the UOp tree
-    int vmax = 1000; // Simplified
-    DivisionMagic magic = transcendental_magicgu(vmax, d);
-    
-    if (!magic.valid) return NULL;
-    
-    // This would require more sophisticated UOp construction
-    // For now, return regular division
-    UOp* d_const = uop_const(x->dtype, (double)d);
-    UOp* div_result = uop_div(x, d_const);
-    
-    // If we had the magic division, we'd do: sign * ((x*m) >> s)
-    // But regular division is what we have now
-    
-    return div_result;
+
+    DivisionMagic ms = transcendental_magicgu((int)vmax, ad);
+    if (!ms.valid) return NULL;
+
+    // if m * vmax <= dtypes.max(x.dtype): return sign * ((x*m) >> s)
+    unsigned __int128 prod = (unsigned __int128)(unsigned long long)ms.magic * (unsigned __int128)(unsigned long long)vmax;
+    long double xmax = (long double)dtype_max;
+    if ((long double)prod <= xmax) {
+        UOp* xm = uop_mul(x, uop_const(x->dtype, (double)ms.magic));
+        UOp* q = transcendental_shr(xm, ms.shift);
+        UOp* sgn = uop_const(x->dtype, (double)sign);
+        return uop_mul(sgn, q);
+    }
+
+    // else, try unsigned promotion of same width
+    const DType* next_dtype = unsigned_variant(&x->dtype);
+    if (dtypes_is_int(next_dtype) && device_supports_dtype(device, next_dtype)) {
+        long double next_max = (long double)dtypes_max(next_dtype);
+        if ((long double)prod <= next_max) {
+            UOp* xc = uop_cast(x, *next_dtype);
+            UOp* xm = uop_mul(xc, uop_const(*next_dtype, (double)ms.magic));
+            UOp* q = transcendental_shr(xm, ms.shift);
+            UOp* q_back = uop_cast(q, x->dtype);
+            UOp* sgn = uop_const(x->dtype, (double)sign);
+            return uop_mul(sgn, q_back);
+        }
+    }
+    return NULL;
 }

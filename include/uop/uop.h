@@ -287,6 +287,23 @@ typedef struct UPat {
     };
     UPat** src;
     size_t src_count;
+    // Extended pattern metadata for parity with Python
+    // Multi-op and multi-dtype lists
+    Ops* op_list;
+    size_t op_list_count;
+    const DType** dtype_list;
+    size_t dtype_list_count;
+    // Argument equality (integer literal)
+    bool has_int_arg;
+    int arg_int;
+    // Argument equality via binding/placeholder (rendered by renderer)
+    bool has_arg_bind;
+    const char* arg_bind_str;
+    // Repeat and forked source forms
+    bool src_is_repeat;         // src[0] is a repeat pattern
+    bool src_is_fork;           // src encodes concatenated tuples
+    int* fork_group_sizes;      // sizes of each tuple group in src
+    size_t fork_group_count;
     // Additional fields for pattern matching
     bool strict_length;
     int required_len;
@@ -467,6 +484,18 @@ UPat* upat_const(double val);
 UPat* upat_any(void);
 bool upat_match(UPat* pattern, UOp* uop);
 void upat_free(UPat* pat);
+
+// UPat pattern construction helpers (to mirror Python usage)
+void upat_set_name(UPat* pat, const char* name);
+void upat_set_required_len(UPat* pat, int required_len, bool strict);
+void upat_set_dtype(UPat* pat, const DType* dtype);
+void upat_set_op_list(UPat* pat, const Ops* ops, size_t count);
+void upat_set_dtype_list(UPat* pat, const DType* const* dtypes, size_t count);
+void upat_set_arg_int(UPat* pat, int value);
+void upat_set_arg_bind(UPat* pat, const char* bind_name);
+void upat_set_src(UPat* pat, UPat** src, size_t count);
+void upat_set_repeat(UPat* pat, UPat* repeated);
+void upat_set_fork(UPat* pat, UPat*** groups, const int* group_sizes, size_t group_count);
 
 // UPat compilation system
 PatternMatcher* pattern_matcher_new(PatternMatch* matches, size_t match_count, bool compiled);
