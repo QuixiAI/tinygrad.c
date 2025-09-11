@@ -2238,6 +2238,30 @@ UPat* upat_var(int id) {
     return pat;
 }
 
+UPat* upat_var_named(const char* name, const DType* const* dts, size_t dtype_count, bool vec_any) {
+    UPat* pat = (UPat*)calloc(1, sizeof(UPat));
+    pat->type = UPAT_VAR;
+    // name
+    if (name) {
+        pat->name = strdup(name);
+    }
+    // dtype list
+    if (dts && dtype_count>0) {
+        const DType** arr = (const DType**)malloc(sizeof(DType*)*dtype_count);
+        for (size_t i=0;i<dtype_count;i++) arr[i]=dts[i];
+        pat->dtype_list = arr;
+        pat->dtype_list_count = dtype_count;
+    }
+    pat->vec_any = vec_any;
+    return pat;
+}
+
+UPat* upat_cvar_named(const char* name, const DType* const* dts, size_t dtype_count, bool vec_any) {
+    UPat* pat = upat_var_named(name, dts, dtype_count, vec_any);
+    pat->require_const = true;
+    return pat;
+}
+
 UPat* upat_const(double val) {
     UPat* pat = (UPat*)calloc(1, sizeof(UPat));
     pat->type = UPAT_CONST;
@@ -2249,6 +2273,22 @@ UPat* upat_any(void) {
     UPat* pat = (UPat*)calloc(1, sizeof(UPat));
     pat->type = UPAT_ANY;
     return pat;
+}
+
+UPat* upat_not(UPat* p) {
+    // Logical NOT pattern: CMPEQ(p, False)
+    UPat* src[2] = { p, upat_const(0.0) };
+    return upat_op(OPS_CMPEQ, src, 2);
+}
+
+UPat* upat_and(UPat* a, UPat* b) {
+    UPat* src[2] = { a, b };
+    return upat_op(OPS_AND, src, 2);
+}
+
+UPat* upat_or(UPat* a, UPat* b) {
+    UPat* src[2] = { a, b };
+    return upat_op(OPS_OR, src, 2);
 }
 
 // Line 710-750: Pattern matching
@@ -2263,6 +2303,15 @@ typedef struct {
     size_t capacity;
 } BindingList;
 
+static bool _dtype_list_contains(const DType* const* lst, size_t n, const DType* dt, bool vec_any){
+    if (!lst || n==0) return true;
+    for (size_t i=0;i<n;i++){
+        if (dtype_eq(lst[i], dt)) return true;
+        if (vec_any) { DType sc = dtype_scalar(dt); if (dtype_eq(lst[i], &sc)) return true; }
+    }
+    return false;
+}
+
 static bool match_internal(UPat* pattern, UOp* uop, BindingList* bindings) {
     if (!pattern || !uop) return false;
     
@@ -2276,6 +2325,11 @@ static bool match_internal(UPat* pattern, UOp* uop, BindingList* bindings) {
                 if (bindings->bindings[i].var_id == pattern->var_data.var_id) {
                     return bindings->bindings[i].value == uop;
                 }
+            }
+            // Additional constraints
+            if (pattern->require_const && uop->op != OPS_CONST) return false;
+            if (pattern->dtype_list_count>0) {
+                if (!_dtype_list_contains(pattern->dtype_list, pattern->dtype_list_count, &uop->dtype, pattern->vec_any)) return false;
             }
             // Add new binding
             if (bindings->count >= bindings->capacity) {

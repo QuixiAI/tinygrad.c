@@ -1139,6 +1139,8 @@ PatternMatcher* pattern_matcher_new(PatternMatch* matches, size_t match_count, b
             return NULL;
         }
         memcpy(pm->matches, matches, match_count * sizeof(PatternMatch));
+        // Ensure callback_ex defaults to NULL if not set
+        for (size_t i=0;i<match_count;i++) if (!pm->matches[i].callback_ex) pm->matches[i].callback_ex = NULL;
         pm->match_count = match_count;
         pm->capacity = match_count;
     }
@@ -1163,13 +1165,50 @@ PatternMatcherResult pattern_matcher_apply(PatternMatcher* pm, UOp* root, void* 
         PatternMatch* match = &pm->matches[i];
         if (upat_match(match->pattern, root)) {
             // Apply the callback
-            if (match->callback) {
-                *result = match->callback(ctx, root);
-                return PM_OK;
-            }
+            if (match->callback_ex) { *result = match->callback_ex(ctx, root, NULL, NULL, 0); return PM_OK; }
+            if (match->callback) { *result = match->callback(ctx, root); return PM_OK; }
         }
     }
     
+    return PM_MATCH_ERROR;
+}
+
+typedef struct { const char** names; UOp** values; size_t count; size_t cap; } _NameBindings;
+static void _nb_init(_NameBindings* nb){ nb->names=NULL; nb->values=NULL; nb->count=0; nb->cap=0; }
+static void _nb_add(_NameBindings* nb, const char* n, UOp* v){ if(!n) return; if(nb->count>=nb->cap){ nb->cap = nb->cap? nb->cap*2 : 8; nb->names=(const char**)realloc(nb->names, nb->cap*sizeof(char*)); nb->values=(UOp**)realloc(nb->values, nb->cap*sizeof(UOp*)); } nb->names[nb->count]=n; nb->values[nb->count]=v; nb->count++; }
+
+// Walk pattern and node together to collect simple name bindings (UPAT_VAR with name)
+static void _collect_named_bindings(UPat* pat, UOp* node, _NameBindings* nb){
+    if (!pat || !node) return;
+    if (pat->type == UPAT_VAR && pat->name) { _nb_add(nb, pat->name, node); }
+    if (pat->type == UPAT_OP && pat->src_count == node->src_count) {
+        for (size_t i=0;i<pat->src_count;i++) _collect_named_bindings(pat->src[i], node->src[i], nb);
+    }
+}
+
+PatternMatcherResult pattern_matcher_apply_bindings(PatternMatcher* pm, UOp* root, void* ctx, void** result, UPatBindings* binds_out) {
+    if (!pm || !root || !result) return PM_COMPILE_ERROR;
+    if (binds_out){ binds_out->names=NULL; binds_out->values=NULL; binds_out->count=0; }
+    *result = NULL;
+    for (size_t i = 0; i < pm->match_count; i++) {
+        PatternMatch* match = &pm->matches[i];
+        if (upat_match(match->pattern, root)) {
+            _NameBindings nb; _nb_init(&nb);
+            _collect_named_bindings(match->pattern, root, &nb);
+            if (match->callback_ex) {
+                *result = match->callback_ex(ctx, root, nb.names, nb.values, nb.count);
+            } else if (match->callback) {
+                *result = match->callback(ctx, root);
+            }
+            if (*result && binds_out) {
+                binds_out->names = nb.names;
+                binds_out->values = nb.values;
+                binds_out->count = nb.count;
+            }
+            else { if (nb.names) free(nb.names); if (nb.values) free(nb.values); }
+            return PM_OK;
+        }
+    }
     return PM_MATCH_ERROR;
 }
 

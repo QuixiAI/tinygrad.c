@@ -320,6 +320,8 @@ typedef struct UPat {
     size_t op_list_count;
     const DType** dtype_list;
     size_t dtype_list_count;
+    bool vec_any;          // accept vectorized variants of dtype filter
+    bool require_const;    // for cvar: require uop to be CONST
     // Argument equality (integer literal)
     bool has_int_arg;
     int arg_int;
@@ -351,6 +353,7 @@ typedef struct PatternMatch PatternMatch;
 typedef struct PatternMatch {
     UPat* pattern;
     void* (*callback)(void*, void*);  // Function pointer
+    void* (*callback_ex)(void* ctx, void* node, const char** names, UOp** values, size_t nbinds);  // Extended with bindings
     void* user_data;
 } PatternMatch;
 
@@ -525,8 +528,13 @@ void* uop_buffer_map_get(UOp* uop);
 // Pattern matching functions
 UPat* upat_op(Ops op, UPat** src, size_t src_count);
 UPat* upat_var(int id);
+UPat* upat_var_named(const char* name, const DType* const* dts, size_t dtype_count, bool vec_any);
+UPat* upat_cvar_named(const char* name, const DType* const* dts, size_t dtype_count, bool vec_any);
 UPat* upat_const(double val);
 UPat* upat_any(void);
+UPat* upat_not(UPat* p);
+UPat* upat_and(UPat* a, UPat* b);
+UPat* upat_or(UPat* a, UPat* b);
 bool upat_match(UPat* pattern, UOp* uop);
 void upat_free(UPat* pat);
 
@@ -550,6 +558,13 @@ UPat* upat_group_all_except(Ops exclude, UPat** src, size_t src_count);
 PatternMatcher* pattern_matcher_new(PatternMatch* matches, size_t match_count, bool compiled);
 void pattern_matcher_free(PatternMatcher* pm);
 PatternMatcherResult pattern_matcher_apply(PatternMatcher* pm, UOp* root, void* ctx, void** result);
+// Extended apply that also returns named bindings captured in pattern
+typedef struct {
+  const char** names;
+  UOp** values;
+  size_t count;
+} UPatBindings;
+PatternMatcherResult pattern_matcher_apply_bindings(PatternMatcher* pm, UOp* root, void* ctx, void** result, UPatBindings* binds_out);
 
 // UPat compilation functions
 UPat* upat_create(void);
