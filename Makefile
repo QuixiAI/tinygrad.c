@@ -1,5 +1,7 @@
 SHELL := /bin/bash
 DOCKER_IMAGE ?= conanio/gcc11-ubuntu16.04:2.20.1
+PYTHON ?= python3
+VENV_DIR ?= .venv
 
 # Quiet by default. Set QUIET=0 for verbose logs.
 QUIET ?= 1
@@ -19,10 +21,12 @@ endif
 # If using local Conan (default), we prefer a project-local cache unless PERSIST_CONAN=1.
 # When PERSIST_CONAN=1, use the user's home cache (~/.conan2). CLEAN_CONAN=1 clears that cache first.
 CONAN_CACHE_DIR ?= $(PWD)/build/.conan2
+# Use project-local Conan cache by default; users can opt-in to home cache with PERSIST_CONAN=1
 CONAN_HOME ?= $(if $(filter 1,$(PERSIST_CONAN)),$(HOME)/.conan2,$(CONAN_CACHE_DIR))
-CONAN_BIN ?= $(if $(wildcard $(PWD)/.venv/bin/conan),$(PWD)/.venv/bin/conan,conan)
+CONAN_BIN ?= $(if $(wildcard $(PWD)/$(VENV_DIR)/bin/conan),$(PWD)/$(VENV_DIR)/bin/conan,conan)
+TOOLCHAIN_PATH := build/conan/build/Release/generators/conan_toolchain.cmake
 
-.PHONY: all build rebuild test clean realclean
+.PHONY: all build rebuild test clean realclean setup conan
 
 all: build
 
@@ -31,37 +35,13 @@ build:
 	@set -euo pipefail; \
 	if [ "${CLEAN:-0}" = "1" ]; then rm -rf build; fi; \
 	mkdir -p build/logs; \
-	mkdir -p "$(CONAN_HOME)"; \
-	mkdir -p build/conan/locks; \
-	echo "[conan] using: $(CONAN_BIN) (CONAN_HOME=$(CONAN_HOME))"; \
-	TOOLCHAIN_PATH=build/conan/build/Release/generators/conan_toolchain.cmake; \
-	if [ ! -f "$$TOOLCHAIN_PATH" ]; then \
-	  ( \
-	    export CONAN_HOME="$(CONAN_HOME)"; \
-	    if [ "${CLEAN_CONAN:-0}" = "1" ]; then rm -rf "$$CONAN_HOME"/*; fi; \
-	    mkdir -p "$$CONAN_HOME/profiles"; \
-	    if [ ! -f "$$CONAN_HOME/profiles/default" ]; then "$(CONAN_BIN)" profile detect --force $(CONAN_LOG_LEVEL); fi; \
-	    "$(CONAN_BIN)" lock create . --profile=profiles/linux-gcc11 --lockfile-out=build/conan/locks/linux-gcc11.lock $(CONAN_LOG_LEVEL); \
-	    "$(CONAN_BIN)" install . \
-	      -of build/conan \
-	      --lockfile=build/conan/locks/linux-gcc11.lock \
-	      --profile=profiles/linux-gcc11 \
-	      --build=unity/* \
-	      --build=missing \
-	      -g CMakeDeps -g CMakeToolchain \
-	      --deployer=full_deploy \
-	      --deployer-folder build/conan/full_deploy \
-	      $(CONAN_LOG_LEVEL) \
-	  ) > build/logs/conan_install.log 2>&1 || { echo "Conan failed. See build/logs/conan_install.log"; exit 1; }; \
-	else \
-	  echo "[conan] skipping install (toolchain present)"; \
-	fi; \
+	$(MAKE) $(TOOLCHAIN_PATH) || { echo "Conan failed. See build/logs/conan_install.log"; exit 1; }; \
 	echo "[cmake] configuring..."; \
 	cmake -S . -B build \
 	  -DBUILD_TESTS=ON \
 	  -DBUILD_EXAMPLES=ON \
 	  -DCMAKE_BUILD_TYPE=Release \
-	  -DCMAKE_TOOLCHAIN_FILE=build/conan/build/Release/generators/conan_toolchain.cmake \
+	  -DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_PATH) \
 	  -DCMAKE_C_FLAGS="-DUNITY_INCLUDE_DOUBLE -DUNITY_INCLUDE_FLOAT" \
 	  $(if $(filter 1,$(ASAN)),-DTG_ENABLE_ASAN=ON,-DTG_ENABLE_ASAN=OFF) \
 	  > build/logs/cmake_configure.log 2>&1 || { echo "CMake configure failed. See build/logs/cmake_configure.log"; exit 1; }; \
@@ -70,6 +50,70 @@ build:
 
 rebuild: 
 	$(MAKE) CLEAN=1 build
+
+# Bootstrap: create a Python venv and install Conan locally, then resolve deps
+setup: $(VENV_DIR)/bin/conan
+	@$(MAKE) conan
+
+$(VENV_DIR)/bin/conan:
+	@set -euo pipefail; \
+	if [ ! -d "$(VENV_DIR)" ]; then \
+	  echo "[setup] creating venv at $(VENV_DIR)"; \
+	  $(PYTHON) -m venv "$(VENV_DIR)"; \
+	fi; \
+	"$(VENV_DIR)/bin/pip" install -U pip conan
+
+# Explicit Conan install to produce the CMake toolchain and deps
+conan: $(TOOLCHAIN_PATH)
+
+$(TOOLCHAIN_PATH): conanfile.txt profiles/linux-gcc11 profiles/locks/linux-gcc11.lock
+	@set -euo pipefail; \
+	# Determine which 'conan' to use: prefer project venv, else system
+	if [ -x "$(CONAN_BIN)" ]; then CONAN_CMD="$(CONAN_BIN)"; \
+	elif command -v conan >/dev/null 2>&1; then CONAN_CMD="conan"; \
+	else \
+	  echo "conan not found. Please install Conan 2 into your Python env (e.g., 'python3 -m venv .venv && . .venv/bin/activate && pip install conan') or install system-wide."; \
+	  exit 1; \
+	fi; \
+	LOCK_DIR=build/conan/locks; \
+	LOCK_OUT=$$LOCK_DIR/linux-gcc11.lock; \
+	LOCK_SRC=profiles/locks/linux-gcc11.lock; \
+	mkdir -p "$$LOCK_DIR" build/logs; \
+	echo "[conan] using: $$CONAN_CMD (CONAN_HOME=$(CONAN_HOME))"; \
+	( \
+	  export CONAN_HOME="$(CONAN_HOME)"; \
+	  if [ "${CLEAN_CONAN:-0}" = "1" ]; then rm -rf "$$CONAN_HOME"/*; fi; \
+	  mkdir -p "$$CONAN_HOME/profiles"; \
+	  if [ ! -f "$$CONAN_HOME/profiles/default" ]; then "$$CONAN_CMD" profile detect --force $(CONAN_LOG_LEVEL); fi; \
+	  if ! "$$CONAN_CMD" lock create . --profile=profiles/linux-gcc11 --lockfile-out="$$LOCK_OUT" $(CONAN_LOG_LEVEL); then \
+	    echo "[conan] lock create failed; will try existing lockfile and cached packages"; \
+	  fi; \
+	  if [ -f "$$LOCK_OUT" ]; then USE_LOCK="--lockfile=$$LOCK_OUT"; \
+	  elif [ -f "$$LOCK_SRC" ]; then USE_LOCK="--lockfile=$$LOCK_SRC"; \
+	  else USE_LOCK=""; fi; \
+  if ! "$$CONAN_CMD" install . \
+	      -of build/conan \
+	      $$USE_LOCK \
+	      --profile=profiles/linux-gcc11 \
+	      --build=unity/* \
+	      --build=missing \
+	      -g CMakeDeps -g CMakeToolchain \
+	      --deployer=full_deploy \
+	      --deployer-folder build/conan/full_deploy \
+	      $(CONAN_LOG_LEVEL); then \
+	    echo "[conan] online install failed; retrying with --no-remote using cached packages"; \
+    "$$CONAN_CMD" install . \
+      -of build/conan \
+      $$USE_LOCK \
+      --profile=profiles/linux-gcc11 \
+      --build=never \
+      --no-remote \
+      -g CMakeDeps -g CMakeToolchain \
+      --deployer=full_deploy \
+      --deployer-folder build/conan/full_deploy \
+      $(CONAN_LOG_LEVEL); \
+	  fi; \
+	) > build/logs/conan_install.log 2>&1
 
 test:
 	@set -e; \

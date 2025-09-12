@@ -173,3 +173,4 @@ reference/tinygrad/**/*.pyc
 .env
 .env.local
 config.local.*
+CMakeUserPresets.json

@@ -16,11 +16,18 @@ static char* sb_append(char* base, const char* add) {
 }
 
 typedef struct { UOp** keys; char** names; int count; int cap; } name_map_t;
-static const char* c_type_for(const DType* dt){ const DType* s = dt; if (dt->count>1 && dt->_scalar) s = dt->_scalar;
-  if (dtype_eq(s, &dtypes.float32)) return "float"; if (dtype_eq(s, &dtypes.float64)) return "double";
-  if (dtype_eq(s, &dtypes.int32)) return "int"; if (dtype_eq(s, &dtypes.uint32)) return "unsigned int";
-  if (dtype_eq(s, &dtypes.int8)) return "signed char"; if (dtype_eq(s, &dtypes.uint8)) return "unsigned char";
-  if (dtype_eq(s, &dtypes.bool_)) return "_Bool"; return "int"; }
+static const char* c_type_for(const DType* dt){
+  const DType* s = dt;
+  if (dt->count>1 && dt->_scalar) s = dt->_scalar;
+  if (dtype_eq(s, &dtypes.float32)) return "float";
+  if (dtype_eq(s, &dtypes.float64)) return "double";
+  if (dtype_eq(s, &dtypes.int32)) return "int";
+  if (dtype_eq(s, &dtypes.uint32)) return "unsigned int";
+  if (dtype_eq(s, &dtypes.int8)) return "signed char";
+  if (dtype_eq(s, &dtypes.uint8)) return "unsigned char";
+  if (dtype_eq(s, &dtypes.bool_)) return "_Bool";
+  return "int";
+}
 static char* render_const(UOp* u){ char buf[64]; if (dtypes_is_float(&u->dtype)) { double v=u->arg.const_data.const_value;
     if (dtype_eq(&u->dtype, &dtypes.float32)) snprintf(buf,sizeof(buf),"%gf",(float)v); else snprintf(buf,sizeof(buf),"%g",v);
   } else if (dtype_eq(&u->dtype,&dtypes.int64)) snprintf(buf,sizeof(buf),"%lldll",(long long)u->arg.const_data.const_value);
@@ -116,6 +123,25 @@ static char* clang_render(Renderer* self, UOp** uops, int uops_count) {
       const char* ptr = ssa_get(&map, u->src[0]); if (!ptr) ptr = "ptr";
       const char* nm = ssa_add(&map, u); char line[256]; INDENT();
       snprintf(line,sizeof(line),"%s %s = *%s;\n", c_type_for(&u->dtype), nm, ptr); src = sb_append(src, line); continue;
+    }
+    if (u->op==OPS_CAST && u->src_count>=1){
+      const char* srcn = ssa_get(&map, u->src[0]); char* srcv = srcn?strdup(srcn):(u->src[0]->op==OPS_CONST?render_const(u->src[0]):strdup("0"));
+      const char* nm = ssa_add(&map, u);
+      char line[512]; INDENT();
+      if (u->dtype.count > 1) {
+        // vector cast
+        snprintf(line,sizeof(line),"%s %s = __builtin_convertvector(%s, %s);\n", c_type_for(&u->dtype), nm, srcv, c_type_for(&u->dtype));
+      } else {
+        snprintf(line,sizeof(line),"%s %s = (%s)(%s);\n", c_type_for(&u->dtype), nm, c_type_for(&u->dtype), srcv);
+      }
+      src = sb_append(src, line); free(srcv); continue;
+    }
+    if (u->op==OPS_BITCAST && u->src_count>=1){
+      const char* srcn = ssa_get(&map, u->src[0]); char* srcv = srcn?strdup(srcn):(u->src[0]->op==OPS_CONST?render_const(u->src[0]):strdup("0"));
+      const char* nm = ssa_add(&map, u);
+      char line[512]; INDENT();
+      snprintf(line,sizeof(line),"%s %s = *((%s*)&%s);\n", c_type_for(&u->dtype), nm, c_type_for(&u->dtype), srcv);
+      src = sb_append(src, line); free(srcv); continue;
     }
     if (u->op==OPS_STORE && u->src_count>=2){
       const char* ptr = ssa_get(&map, u->src[0]); if (!ptr) ptr = "ptr";

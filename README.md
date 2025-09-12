@@ -65,12 +65,12 @@ reference/              # Original tinygrad Python source (for reference only)
 
 ## Build Instructions
 
-### Setup (Conan via Python venv)
+### Setup (install Conan in your Python env)
 
-This project relies on Conan 2 for C/C++ dependencies. The Makefile
-auto-detects and prefers a project-local Python virtualenv at `.venv`.
+This project relies on Conan 2 for C/C++ dependencies.
+We recommend you manage your Python environment explicitly (venv, conda, uv, etc.).
 
-Install Conan into a venv (recommended):
+Example with Python venv:
 
 ```bash
 python3 -m venv .venv
@@ -92,9 +92,12 @@ If you skip the venv, ensure a recent `conan` is available on your `PATH`.
 
 **Quick build:**
 ```bash
-make          # Configure (via Conan in Docker) and build
+make          # Configure (runs Conan if inputs changed) and build
 make test     # Run all tests with dot-reporter
 ```
+
+Note: The build will only re-run Conan when `conanfile.txt`, `profiles/linux-gcc11`,
+or the lockfile change. Otherwise it uses the existing toolchain for fast, offline builds.
 
 **Manual build:**
 ```bash
