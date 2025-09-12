@@ -6,6 +6,29 @@ VENV_DIR ?= .venv
 # Quiet by default. Set QUIET=0 for verbose logs.
 QUIET ?= 1
 ASAN ?= 0
+
+# Load optional local config files for defaults (gitignored)
+-include .env
+-include .env.local
+
+# Reporter selection precedence (highest first):
+# 1) command-line: `make test REPORTER=tap` (command-line only)
+# 2) environment/local: TINYGRADC_TEST_REPORTER, TEST_REPORTER (via env or .env/.env.local)
+# 3) default: dot
+# Note: environment REPORTER is intentionally ignored to avoid collisions with other tools.
+EFFECTIVE_REPORTER :=
+ifeq ($(origin REPORTER),command line)
+  EFFECTIVE_REPORTER := $(REPORTER)
+endif
+ifeq ($(strip $(EFFECTIVE_REPORTER)),)
+  ifneq ($(strip $(TINYGRADC_TEST_REPORTER)),)
+    EFFECTIVE_REPORTER := $(TINYGRADC_TEST_REPORTER)
+  else ifneq ($(strip $(TEST_REPORTER)),)
+    EFFECTIVE_REPORTER := $(TEST_REPORTER)
+  else
+    EFFECTIVE_REPORTER := dot
+  endif
+endif
 ifeq ($(QUIET),1)
   MAKEFLAGS += -s
   CMAKE_BUILD_SILENT := -- -s
@@ -123,7 +146,9 @@ test:
 	fi; \
 	bash -lc ' \
 	  total_tests=0; total_passed=0; total_failed=0; total_ignored=0; failed_details=""; crashed_suites=""; \
+	  test_index=0; \
 	  test_count=$$(ls build/test_* 2>/dev/null | wc -l); \
+	  if [ "$(EFFECTIVE_REPORTER)" = "tap" ]; then echo "TAP version 13"; fi; \
 	  echo "Running $$test_count test suites..."; \
 	  for test in build/test_*; do \
 	    if [ -x "$$test" ]; then \
@@ -143,7 +168,8 @@ test:
 	          *) signal_name="signal $$signal_num" ;; \
 	        esac; \
 	        crashed_suites="$$crashed_suites  $$suite_file ($$signal_name)\n"; \
-	        printf "X"; \
+	        if [ "$(EFFECTIVE_REPORTER)" = "dot" ]; then printf "X"; \
+	        else echo "# CRASH: $$suite_file ($$signal_name)"; fi; \
 	        continue; \
 	      fi; \
 	      has_test_output=false; \
@@ -151,15 +177,31 @@ test:
 	        has_test_output=true; \
 	        while IFS= read -r line; do \
 	          if echo "$$line" | grep -q ":PASS$$"; then \
-	            printf "."; total_passed=$$((total_passed + 1)); total_tests=$$((total_tests + 1)); \
+	            total_passed=$$((total_passed + 1)); total_tests=$$((total_tests + 1)); \
+	            test_index=$$((test_index + 1)); \
+	            if [ "$(EFFECTIVE_REPORTER)" = "dot" ]; then \
+	              printf "."; \
+	            else \
+	              suite_name=$$(basename "$$test"); \
+	              test_name=$$(echo "$$line" | cut -d: -f3); \
+	              echo "ok $$test_index - $$suite_name :: $$test_name"; \
+	            fi; \
 	          elif echo "$$line" | grep -q ":FAIL"; then \
-	            printf "F"; total_failed=$$((total_failed + 1)); total_tests=$$((total_tests + 1)); \
+	            total_failed=$$((total_failed + 1)); total_tests=$$((total_tests + 1)); \
+	            test_index=$$((test_index + 1)); \
 	            full_path=$$(echo "$$line" | cut -d: -f1); \
 	            line_num=$$(echo "$$line" | cut -d: -f2); \
 	            test_name=$$(echo "$$line" | cut -d: -f3); \
 	            suite_name=$$(basename "$$test"); \
 	            rel_path=$$(echo "$$full_path" | sed "s|$$PWD/||"); \
 	            fail_msg=$$(echo "$$line" | sed "s/.*:FAIL[: ]*//"); \
+	            if [ "$(EFFECTIVE_REPORTER)" = "dot" ]; then \
+	              printf "F"; \
+	            else \
+	              echo "not ok $$test_index - $$suite_name :: $$test_name"; \
+	              echo "# $$rel_path:$$line_num"; \
+	              if [ -n "$$fail_msg" ] && [ "$$fail_msg" != "$$line" ]; then echo "# $$fail_msg"; fi; \
+	            fi; \
 	            if [ -z "$$fail_msg" ] || [ "$$fail_msg" = "$$line" ]; then \
 	              failed_details="$$failed_details\n  ✗ $$suite_name :: $$rel_path:$$line_num:$$test_name"; \
 	            else \
@@ -171,28 +213,32 @@ test:
 	      if [ "$$has_test_output" = "false" ] && [ "$$exit_code" -ne 0 ]; then \
 	        suite_name=$$(basename "$$test"); \
 	        crashed_suites="$$crashed_suites  $$suite_name (ERROR - no test output)\n"; \
-	        printf "E"; \
+	        if [ "$(EFFECTIVE_REPORTER)" = "dot" ]; then printf "E"; else echo "# ERROR: $$suite_name (no test output)"; fi; \
 	      fi; \
 	      if echo "$$output" | grep -q "Tests.*Failures.*Ignored"; then \
 	        summary=$$(echo "$$output" | grep "Tests.*Failures.*Ignored" | tail -1); \
 	        ignored=$$(echo "$$summary" | sed -n "s/.*Failures \\([0-9]*\\) Ignored.*/\\1/p"); \
 	        if [ -n "$$ignored" ] && [ "$$ignored" -gt 0 ]; then \
 	          total_ignored=$$((total_ignored + ignored)); \
-	          for ((i=1; i<=ignored; i++)); do printf "i"; done; \
+	          if [ "$(EFFECTIVE_REPORTER)" = "dot" ]; then \
+	            for ((i=1; i<=ignored; i++)); do printf "i"; done; \
+	          else \
+	            for ((i=1; i<=ignored; i++)); do echo "# SKIP (ignored by Unity)"; done; \
+	          fi; \
 	        fi; \
 	      fi; \
 	    fi; \
 	  done; \
-	  echo ""; echo ""; \
+	  if [ "$(EFFECTIVE_REPORTER)" = "tap" ]; then echo "1..$$total_tests"; else echo ""; echo ""; fi; \
 	  if [ "$$total_failed" -eq 0 ] && [ -z "$$crashed_suites" ]; then \
-	    echo "✓ $$total_passed tests passed"; \
+	    if [ "$(EFFECTIVE_REPORTER)" = "dot" ]; then echo "✓ $$total_passed tests passed"; else echo "# $$total_passed tests passed"; fi; \
 	  else \
-	    echo ""; \
+	    if [ "$(EFFECTIVE_REPORTER)" = "dot" ]; then echo ""; fi; \
 	    echo "Tests: $$total_failed failed, $$total_passed passed, $$total_ignored ignored, $$total_tests total"; \
 	    if [ -n "$$failed_details" ] || [ -n "$$crashed_suites" ]; then \
-	      echo ""; echo "Failed tests:"; \
-	      if [ -n "$$failed_details" ]; then echo -e "$$failed_details"; fi; \
-	      if [ -n "$$crashed_suites" ]; then echo ""; echo "Crashed suites:"; echo -e "$$crashed_suites"; fi; \
+	      if [ "$(EFFECTIVE_REPORTER)" = "dot" ]; then echo ""; echo "Failed tests:"; fi; \
+	      if [ -n "$$failed_details" ]; then if [ "$(EFFECTIVE_REPORTER)" = "dot" ]; then echo -e "$$failed_details"; else echo "# Failed tests:"; echo "# $$failed_details" | sed "s/^/# /"; fi; fi; \
+	      if [ -n "$$crashed_suites" ]; then if [ "$(EFFECTIVE_REPORTER)" = "dot" ]; then echo ""; echo "Crashed suites:"; echo -e "$$crashed_suites"; else echo "# Crashed suites:"; echo "# $$crashed_suites" | sed "s/^/# /"; fi; fi; \
 	    fi; \
 	    exit 1; \
 	  fi'

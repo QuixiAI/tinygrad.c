@@ -33,9 +33,17 @@ The project uses Unity test framework with Test-Driven Development (TDD) approac
 
 Run tests with:
 ```bash
-make test          # Dot-reporter style with summary
+make test                 # Dot-reporter style with summary
+make test REPORTER=tap    # TAP v13 output (with plan at end)
 ./build/test_NAME  # Run individual test suite
 ```
+
+To change the default reporter without passing it each time, use one of:
+- Environment: `export TEST_REPORTER=tap` (or `TINYGRADC_TEST_REPORTER=tap`)
+- Local config: create `.env` with `TEST_REPORTER=tap` (gitignored)
+
+Precedence: command-line `REPORTER=` > env (`TEST_REPORTER`/`TINYGRADC_TEST_REPORTER`) > .env/.env.local > default (dot).
+Note: environment `REPORTER` is ignored to avoid collisions with other tools.
 
 ## Project overview
 

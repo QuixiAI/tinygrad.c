@@ -92,8 +92,9 @@ If you skip the venv, ensure a recent `conan` is available on your `PATH`.
 
 **Quick build:**
 ```bash
-make          # Configure (runs Conan if inputs changed) and build
-make test     # Run all tests with dot-reporter
+make                        # Configure (runs Conan if inputs changed) and build
+make test                   # Run all tests (dot reporter)
+make test REPORTER=tap      # Run all tests (TAP v13 output)
 ```
 
 Note: The build will only re-run Conan when `conanfile.txt`, `profiles/linux-gcc11`,
@@ -113,8 +114,19 @@ Tests use the Unity framework and are built as executables registered with `ctes
 
 **Run all tests:**
 ```bash
-make test
+make test                 # dot reporter
+make test REPORTER=tap    # TAP v13 reporter
 ```
+
+Test reporter configuration (precedence):
+- Command line: `make test REPORTER=tap` (command-line overrides only)
+- Environment/local: `export TEST_REPORTER=tap` or `export TINYGRADC_TEST_REPORTER=tap`
+- Local config files: add `TEST_REPORTER=tap` to `.env` or `.env.local`
+- Default: `dot`
+
+Notes:
+- `.env` and `.env.local` are gitignored and loaded automatically by `make` if present.
+- Command-line `REPORTER=...` overrides other sources. Environment `REPORTER` is ignored to avoid cross-tool collisions; use `TEST_REPORTER` instead.
 
 Advanced
 - `CLEAN=1 make`: Removes `build/` before configuring (fresh build dir).
