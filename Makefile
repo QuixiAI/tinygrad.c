@@ -15,9 +15,12 @@ else
   REDIR :=
 endif
 
-# Persist Conan cache across builds (default to host cache)
-# This avoids re-downloading on every build by mounting a stable cache into the container
+# Conan configuration
+# If using local Conan (default), we prefer a project-local cache unless PERSIST_CONAN=1.
+# When PERSIST_CONAN=1, use the user's home cache (~/.conan2). CLEAN_CONAN=1 clears that cache first.
 CONAN_CACHE_DIR ?= $(PWD)/build/.conan2
+CONAN_HOME ?= $(if $(filter 1,$(PERSIST_CONAN)),$(HOME)/.conan2,$(CONAN_CACHE_DIR))
+CONAN_BIN ?= $(if $(wildcard $(PWD)/.venv/bin/conan),$(PWD)/.venv/bin/conan,conan)
 
 .PHONY: all build rebuild test clean realclean
 
@@ -28,21 +31,18 @@ build:
 	@set -euo pipefail; \
 	if [ "${CLEAN:-0}" = "1" ]; then rm -rf build; fi; \
 	mkdir -p build/logs; \
-	mkdir -p "$(CONAN_CACHE_DIR)"; \
-	echo "[conan] installing dependencies..."; \
-	( docker run --rm \
-	  -v "$$PWD":/work -w /work \
-	  -v "$(CONAN_CACHE_DIR)":/cache/.conan2 -e CONAN_HOME=/cache/.conan2 \
-	  -e CLEAN_CONAN \
-	  --user "`id -u`":"`id -g`" \
-	  "$(DOCKER_IMAGE)" \
-	  bash -lc ' \
-	    if [ "${CLEAN_CONAN:-0}" = "1" ]; then rm -rf "${CONAN_HOME}"/*; fi; \
-	    mkdir -p "${CONAN_HOME}/profiles"; \
-	    if [ ! -f "${CONAN_HOME}/profiles/default" ]; then conan profile detect --force $(CONAN_LOG_LEVEL); fi; \
-	    mkdir -p build/conan/locks; \
-	    conan lock create . --profile=profiles/linux-gcc11 --lockfile-out=build/conan/locks/linux-gcc11.lock $(CONAN_LOG_LEVEL); \
-	    conan install . \
+	mkdir -p "$(CONAN_HOME)"; \
+	mkdir -p build/conan/locks; \
+	echo "[conan] using: $(CONAN_BIN) (CONAN_HOME=$(CONAN_HOME))"; \
+	TOOLCHAIN_PATH=build/conan/build/Release/generators/conan_toolchain.cmake; \
+	if [ ! -f "$$TOOLCHAIN_PATH" ]; then \
+	  ( \
+	    export CONAN_HOME="$(CONAN_HOME)"; \
+	    if [ "${CLEAN_CONAN:-0}" = "1" ]; then rm -rf "$$CONAN_HOME"/*; fi; \
+	    mkdir -p "$$CONAN_HOME/profiles"; \
+	    if [ ! -f "$$CONAN_HOME/profiles/default" ]; then "$(CONAN_BIN)" profile detect --force $(CONAN_LOG_LEVEL); fi; \
+	    "$(CONAN_BIN)" lock create . --profile=profiles/linux-gcc11 --lockfile-out=build/conan/locks/linux-gcc11.lock $(CONAN_LOG_LEVEL); \
+	    "$(CONAN_BIN)" install . \
 	      -of build/conan \
 	      --lockfile=build/conan/locks/linux-gcc11.lock \
 	      --profile=profiles/linux-gcc11 \
@@ -52,13 +52,16 @@ build:
 	      --deployer=full_deploy \
 	      --deployer-folder build/conan/full_deploy \
 	      $(CONAN_LOG_LEVEL) \
-	  ' ) > build/logs/conan_install.log 2>&1 || { echo "Conan failed. See build/logs/conan_install.log"; exit 1; }; \
+	  ) > build/logs/conan_install.log 2>&1 || { echo "Conan failed. See build/logs/conan_install.log"; exit 1; }; \
+	else \
+	  echo "[conan] skipping install (toolchain present)"; \
+	fi; \
 	echo "[cmake] configuring..."; \
 	cmake -S . -B build \
 	  -DBUILD_TESTS=ON \
 	  -DBUILD_EXAMPLES=ON \
 	  -DCMAKE_BUILD_TYPE=Release \
-	  -DCMAKE_TOOLCHAIN_FILE=build/conan/conan_toolchain.cmake \
+	  -DCMAKE_TOOLCHAIN_FILE=build/conan/build/Release/generators/conan_toolchain.cmake \
 	  -DCMAKE_C_FLAGS="-DUNITY_INCLUDE_DOUBLE -DUNITY_INCLUDE_FLOAT" \
 	  $(if $(filter 1,$(ASAN)),-DTG_ENABLE_ASAN=ON,-DTG_ENABLE_ASAN=OFF) \
 	  > build/logs/cmake_configure.log 2>&1 || { echo "CMake configure failed. See build/logs/cmake_configure.log"; exit 1; }; \
