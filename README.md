@@ -65,6 +65,23 @@ reference/              # Original tinygrad Python source (for reference only)
 
 ## Build Instructions
 
+### Setup (Conan via Python venv)
+
+This project relies on Conan 2 for C/C++ dependencies. The Makefile
+auto-detects and prefers a project-local Python virtualenv at `.venv`.
+
+Install Conan into a venv (recommended):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip conan
+# Optional: create/update a default profile (Makefile does this if missing)
+conan profile detect --force
+```
+
+If you skip the venv, ensure a recent `conan` is available on your `PATH`.
+
 **Requirements:**
 - [CMake](https://cmake.org/) ≥ 3.16
 - C compiler (GCC, Clang, or AppleClang)
@@ -103,7 +120,7 @@ Advanced
 - `make rebuild`: Alias for `CLEAN=1 make`.
 
 Notes
-- Conan always runs inside Docker; CMake builds/tests run on the host.
+- Conan runs via the local binary (`.venv/bin/conan` if present, else system `conan`).
 - A checked-in Conan profile lives at `profiles/linux-gcc11`; a lockfile is created under `build/conan/locks/` and used on installs for reproducible dependency resolution.
 
 **Run individual tests:**
