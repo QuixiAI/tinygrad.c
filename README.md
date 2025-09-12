@@ -135,6 +135,15 @@ Notes
 ./build/test_uop
 ```
 
+Run a logical suite (labels):
+- Tests are labeled by their prefix after `test_`. For example,
+  `test_device.c`, `test_device_available.c`, `test_device_default.c` are all labeled `device`.
+- Use CTest to run a suite by label:
+
+```bash
+ctest --test-dir build -L device --output-on-failure
+```
+
 **Or run all with CTest:**
 
 ```bash

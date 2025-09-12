@@ -27,7 +27,6 @@ TEST(test_frombuffer_and_data) {
   TEST_ASSERT_EQUAL_UINT64(1, a->ndim);
   TEST_ASSERT_EQUAL_UINT64(4, a->shape[0]);
   TEST_ASSERT_EQUAL_PTR(buf, np_data(a));
-  // free array metadata but not external buffer
   np_free(a);
 }
 
@@ -80,3 +79,4 @@ void setUp(void) {}
 void tearDown(void) {}
 
 TEST_MAIN()
+

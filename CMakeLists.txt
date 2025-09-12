@@ -304,6 +304,9 @@ if(BUILD_TESTS)
     add_executable(${test_name} ${test_source})
     target_link_libraries(${test_name} PRIVATE test_common)
     add_test(NAME ${test_name} COMMAND ${test_name})
+    # Derive a suite label from the filename: test_<label>[_...].c -> <label>
+    string(REGEX REPLACE "^test_([^_]+).*$" "\\1" test_label ${test_name})
+    set_tests_properties(${test_name} PROPERTIES LABELS ${test_label})
   endforeach()
 
   # Tools for CI checks (not registered as tests)
