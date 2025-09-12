@@ -19,11 +19,7 @@ typedef struct KernelInfo KernelInfo;
 typedef struct PatternMatcher PatternMatcher;
 
 // Port of: from tinygrad.renderer import Renderer, ProgramSpec, Estimates
-typedef struct Estimates {
-    int ops;
-    int mem;
-    int lds;
-} Estimates;
+// NOTE: Estimates now defined in include/renderer/renderer.h
 
 typedef struct ProgramSpec {
     char* name;
@@ -38,6 +34,10 @@ typedef struct ProgramSpec {
     char* function_name;
     Variable** vars;
     int vars_count;
+    // additional fields per Python ProgramSpec
+    int* globals; int globals_count;
+    int* outs; int outs_count;
+    int* ins; int ins_count;
     Estimates estimates;
 } ProgramSpec;
 

@@ -16,6 +16,7 @@
 #include "engine/schedule.h"
 #include "renderer/renderer.h"
 #include "codegen/codegen.h"
+#include "uop/uop.h"
 
 // Port of: from typing import cast, Generator
 // Port of: import time, pprint
@@ -108,6 +109,98 @@ ProgramSpec* get_program(UOp* ast, Renderer* renderer, Opt** opts, int opts_coun
     if (renderer->has_local) {
         spec->global_size[0] = spec->global_size[1] = spec->global_size[2] = 1;
         spec->local_size[0] = spec->local_size[1] = spec->local_size[2] = 1;
+    }
+    // function_name from name (to_function_name parity)
+    spec->function_name = renderer_to_function_name(spec->name);
+    // rough estimates (ignore_indexing=True as in Python ProgramSpec.estimates)
+    spec->estimates = renderer_estimates_from_uops(uops, uops_count, /*ignore_indexing*/1);
+
+    // Derive ProgramSpec fields from uops (Python __post_init__ parity)
+    // globals/ins/outs and vars collection + special sizes
+    // NOTE: Python initializes sizes outside and SPECIAL overrides. we mimic that.
+    // Collect vars and global buffer ids
+    int vars_cap=8; spec->vars_count=0; spec->vars = (Variable**)malloc(sizeof(Variable*)*vars_cap);
+    int g_cap=8; spec->globals_count=0; spec->globals = (int*)malloc(sizeof(int)*g_cap);
+    int ins_cap=16; spec->ins_count=0; spec->ins = (int*)malloc(sizeof(int)*ins_cap);
+    int outs_cap=16; spec->outs_count=0; spec->outs = (int*)malloc(sizeof(int)*outs_cap);
+    for (int i=0;i<uops_count;i++) {
+        UOp* u = uops[i]; if (!u) continue;
+        if (u->op == OPS_DEFINE_VAR) {
+            if (spec->vars_count>=vars_cap){ vars_cap*=2; spec->vars=(Variable**)realloc(spec->vars, sizeof(Variable*)*vars_cap);} 
+            spec->vars[spec->vars_count++] = (Variable*)u;
+        }
+        if (u->op == OPS_DEFINE_GLOBAL) {
+            int id = (u->arg.type==ARG_INT)? u->arg.int_data.i : 0;
+            if (spec->globals_count>=g_cap){ g_cap*=2; spec->globals=(int*)realloc(spec->globals, sizeof(int)*g_cap);} 
+            spec->globals[spec->globals_count++] = id;
+        }
+        if (u->op == OPS_STORE) {
+            // walk dst buffer index topo to find DEFINE_GLOBAL IDs
+            if (u->src_count>=1) {
+                size_t n=0; UOp** topo = uop_toposort(u->src[0], &n);
+                if (topo){ for (size_t k=0;k<n;k++){ if (topo[k]->op==OPS_DEFINE_GLOBAL){ int id=(topo[k]->arg.type==ARG_INT)? topo[k]->arg.int_data.i : 0; if (spec->outs_count>=outs_cap){ outs_cap*=2; spec->outs=(int*)realloc(spec->outs, sizeof(int)*outs_cap);} spec->outs[spec->outs_count++]=id; } } free(topo);}            
+            }
+        }
+        if (u->op == OPS_LOAD) {
+            if (u->src_count>=1) {
+                size_t n=0; UOp** topo = uop_toposort(u->src[0], &n);
+                if (topo){ for (size_t k=0;k<n;k++){ if (topo[k]->op==OPS_DEFINE_GLOBAL){ int id=(topo[k]->arg.type==ARG_INT)? topo[k]->arg.int_data.i : 0; if (spec->ins_count>=ins_cap){ ins_cap*=2; spec->ins=(int*)realloc(spec->ins, sizeof(int)*ins_cap);} spec->ins[spec->ins_count++]=id; } } free(topo);}            
+            }
+        }
+        // SPECIAL handled later when renderer sets sizes; no-op here
+    }
+    // Dedup and sort ins/outs
+    // simple O(n^2) dedup then sort ascending
+    #define DEDUP_AND_SORT(arr, cnt) \
+      do { \
+        for (int a=0;a<(cnt);a++){ for (int b=a+1;b<(cnt);){ if ((arr)[a]==(arr)[b]){ memmove((arr)+b,(arr)+b+1,sizeof(int)*((cnt)-b-1)); (cnt)--; } else b++; } } \
+        /* simple insertion sort */ for (int a=1;a<(cnt);a++){ int v=(arr)[a], j=a-1; while (j>=0 && (arr)[j]>v){ (arr)[j+1]=(arr)[j]; j--; } (arr)[j+1]=v; } \
+      } while(0)
+    DEDUP_AND_SORT(spec->ins, spec->ins_count);
+    DEDUP_AND_SORT(spec->outs, spec->outs_count);
+    DEDUP_AND_SORT(spec->globals, spec->globals_count);
+    #undef DEDUP_AND_SORT
+    // Sort vars by variable name (Python: key=lambda v: v.arg)
+    if (spec->vars && spec->vars_count > 1) {
+      int cmp_var(const void* a, const void* b){
+        const UOp* ua = (const UOp*)(*(const Variable* const*)a);
+        const UOp* ub = (const UOp*)(*(const Variable* const*)b);
+        const char* na = (ua && ua->arg.type==ARG_VAR) ? ua->arg.var.name : "";
+        const char* nb = (ub && ub->arg.type==ARG_VAR) ? ub->arg.var.name : "";
+        return strcmp(na, nb);
+      }
+      qsort(spec->vars, spec->vars_count, sizeof(Variable*), cmp_var);
+    }
+
+    // mem_estimate (Python ProgramSpec.mem_estimate)
+    {
+      long long mem_est = 0;
+      size_t tn=0; UOp** topo = uop_toposort(spec->ast, &tn);
+      if (topo) {
+        typedef struct { int op; int gid; int maxbytes; } Group;
+        Group* groups=NULL; int gc=0, gcap=8; groups=(Group*)malloc(sizeof(Group)*gcap);
+        for (size_t i=0;i<tn;i++) {
+          UOp* x = topo[i]; if (!x) continue;
+          if (x->op==OPS_LOAD || x->op==OPS_STORE) {
+            // find DEFINE_GLOBAL id in base of buffer
+            int gid=-1; if (x->src_count>=1) {
+              size_t bn=0; UOp** btop = uop_toposort(x->src[0], &bn);
+              if (btop){ for (size_t k=0;k<bn;k++){ if (btop[k]->op==OPS_DEFINE_GLOBAL){ gid=(btop[k]->arg.type==ARG_INT)? btop[k]->arg.int_data.i : 0; break; } } free(btop);}            
+            }
+            if (gid<0) continue;
+            // compute nbytes for pointer dtype
+            int nbytes = 0; if (x->src_count>=1) { const PtrDType* pd=(const PtrDType*)&x->src[0]->dtype; nbytes = ptrdtype_nbytes(pd); }
+            // find group
+            int gi=-1; for (int j=0;j<gc;j++){ if (groups[j].op==x->op && groups[j].gid==gid){ gi=j; break; } }
+            if (gi<0){ if (gc>=gcap){ gcap*=2; groups=(Group*)realloc(groups,sizeof(Group)*gcap);} groups[gc++] = (Group){ .op=x->op, .gid=gid, .maxbytes=nbytes }; }
+            else { if (nbytes > groups[gi].maxbytes) groups[gi].maxbytes = nbytes; }
+          }
+        }
+        for (int j=0;j<gc;j++) mem_est += groups[j].maxbytes;
+        free(groups);
+        free(topo);
+      }
+      spec->estimates.mem = mem_est;
     }
     
     return spec;
@@ -214,9 +307,17 @@ CompiledRunner* compiled_runner_new(ProgramSpec* p, void* precompiled, void* prg
 float compiled_runner_call(CompiledRunner* self, Buffer** rawbufs, int rawbufs_count, 
                            Variable** var_keys, int* var_vals, int var_count, bool wait) {
     // Port of line 77: global_size, local_size = self.p.launch_dims(var_vals)
-    int global_size[3], local_size[3];
+    int global_size[3] = {0,0,0}, local_size[3] = {0,0,0};
     bool has_global = false, has_local = false;
-    // launch_dims would need to be implemented
+    // Basic parity: use sizes from ProgramSpec if set (we currently only store concrete ints)
+    if (self->p->global_size[0] || self->p->global_size[1] || self->p->global_size[2]) {
+        memcpy(global_size, self->p->global_size, sizeof(global_size));
+        has_global = true;
+    }
+    if (self->p->local_size[0] || self->p->local_size[1] || self->p->local_size[2]) {
+        memcpy(local_size, self->p->local_size, sizeof(local_size));
+        has_local = true;
+    }
     
     // Port of line 78-83: optimize local size if needed
     if (has_global && !has_local && all_int(self->p->global_size, 3)) {

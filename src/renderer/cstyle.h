@@ -1,14 +1,14 @@
 #ifndef SRC_RENDERER_CSTYLE_H
 #define SRC_RENDERER_CSTYLE_H
-/* cstyle.h
- * TODO: port from tinygrad/cstyle.py to C.
- */
+
+#include "renderer/renderer.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* TODO: public declarations */
+// Minimal C-style (Clang/CPU) renderer constructor
+Renderer* renderer_cstyle_clang(void);
 
 #ifdef __cplusplus
 }
