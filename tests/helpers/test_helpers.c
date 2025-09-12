@@ -69,7 +69,8 @@ TEST(test_all_same_argsort_dedup){
   char* in[6] = {"a","b","a","c","b","d"}; char** out=NULL; int n = tg_dedup_str(in,6,&out);
   TEST_ASSERT_EQUAL_INT(4, n);
   TEST_ASSERT_EQUAL_STRING("a", out[0]); TEST_ASSERT_EQUAL_STRING("b", out[1]); TEST_ASSERT_EQUAL_STRING("c", out[2]); TEST_ASSERT_EQUAL_STRING("d", out[3]);
-  for(int i=0;i<n;i++) free(out[i]); free(out);
+  for(int i=0;i<n;i++) free(out[i]);
+  free(out);
 }
 
 TEST(test_diskcache_clear){
@@ -147,4 +148,3 @@ void setUp(void) {}
 void tearDown(void) {}
 
 TEST_MAIN()
-

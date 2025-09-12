@@ -1139,7 +1139,8 @@ UOp** shapetracker_vars(const ShapeTracker* st, int* out_count) {
 }
 
 UOp** shapetracker_var_vals(const ShapeTracker* st, int* out_count, int** out_vals) {
-    if (out_count) *out_count = 0; if (out_vals) *out_vals = NULL;
+    if (out_count) *out_count = 0;
+    if (out_vals) *out_vals = NULL;
     if (!st || !st->views || st->num_views<=0) return NULL;
     size_t cap=16, n=0; UOp** vars=(UOp**)malloc(sizeof(UOp*)*cap); int* vals=(int*)malloc(sizeof(int)*cap);
     if (!vars || !vals){ if (vars) free(vars); if (vals) free(vals); return NULL; }
@@ -1163,7 +1164,8 @@ UOp** shapetracker_var_vals(const ShapeTracker* st, int* out_count, int** out_va
         if (vvars) free(vvars);
         if (vvals_u) free(vvals_u);
     }
-    if (out_count) *out_count = (int)n; if (out_vals) *out_vals = vals; else free(vals);
+    if (out_count) *out_count = (int)n;
+    if (out_vals) *out_vals = vals; else free(vals);
     return vars;
 }
 

@@ -54,7 +54,8 @@ void tg_tqdm_begin(const char* prefix, long total){
 
 void tg_tqdm_update(long current){
   if (!_bar.enabled) return;
-  if (current < 0) current = 0; _bar.current = current;
+  if (current < 0) current = 0;
+  _bar.current = current;
   if (_bar.total > 0 && _bar.current > _bar.total) _bar.current = _bar.total;
 
   long pct = (_bar.total>0) ? (_bar.current * 100L) / _bar.total : -1;

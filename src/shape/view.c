@@ -81,11 +81,7 @@ static Contraction* get_contraction(const int32_t *old_shape, int old_ndim, cons
   // build groups ranges from [0]+split[:-1] to split[:-1]+[len(old)]
   Contraction *c = (Contraction*)calloc(1,sizeof(Contraction));
   c->n = new_ndim; c->groups=(int**)calloc(new_ndim,sizeof(int*)); c->lengths=(int*)calloc(new_ndim,sizeof(int));
-  int prev = 0;
-  for (int i=0;i<new_ndim;i++){
-    int st = (i==0) ? 0 : split[i-1];
-    int ed = (i<new_ndim-1) ? split[i-1] : old_ndim; // we'll correct this below using split
-  }
+  // compute ranges based on split points (starts and ends)
   // Now actually compute ranges with starts and ends
   int *starts = (int*)malloc(sizeof(int)*new_ndim);
   int *ends   = (int*)malloc(sizeof(int)*new_ndim);
@@ -101,7 +97,7 @@ static Contraction* get_contraction(const int32_t *old_shape, int old_ndim, cons
 }
 
 // returns contraction with borrow for reduce axes; returns NULL if impossible
-static Contraction* get_contraction_with_reduce(const int32_t *old_shape, int old_ndim, const int32_t *new_shape, int new_ndim,
+static __attribute__((unused)) Contraction* get_contraction_with_reduce(const int32_t *old_shape, int old_ndim, const int32_t *new_shape, int new_ndim,
                                                 const int *reduce_axis, int reduce_count){
   Contraction* c = get_contraction(old_shape, old_ndim, new_shape, new_ndim); if (!c) return NULL;
   // Build a set-like lookup for reduce axes

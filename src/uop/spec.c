@@ -75,7 +75,8 @@ static void z3rc_init(Z3RenderCtx* rc, Z3_context ctx, Z3_solver solver) {
     rc->ctx = ctx; rc->solver = solver; rc->keys = NULL; rc->vals = NULL; rc->len = 0; rc->cap = 0; rc->ctr = 0;
 }
 static void z3rc_free(Z3RenderCtx* rc) {
-    if (rc->keys) free(rc->keys); if (rc->vals) free(rc->vals);
+    if (rc->keys) free(rc->keys);
+    if (rc->vals) free(rc->vals);
 }
 static Z3_ast z3rc_get(Z3RenderCtx* rc, UOp* u) {
     for (size_t i=0;i<rc->len;i++) if (rc->keys[i]==u) return rc->vals[i];
@@ -278,6 +279,7 @@ static Z3_ast z3_eval(Z3RenderCtx* rc, UOp* u) {
             return NULL;
         }
     }
+  return NULL;
 }
 
 // ---- DEFINE_* dtype metadata shims ----
@@ -397,14 +399,7 @@ static bool validate_mstack(UOp** src, size_t count) {
 }
 
 // tensor_uop_spec equivalent
-static bool validate_movement(UOp** src, size_t count) {
-    if (count != 2) return false;
-    UOp* mv = src[0];
-    UOp* x = src[1];
-    DType mvb = dtype_scalar(&mv->dtype);
-    DType xb = dtype_scalar(&x->dtype);
-    return dtype_eq(&mvb, &xb) || dtype_eq(&mv->dtype, &x->dtype);
-}
+// removed unused validate_movement; movement validation handled by cb_validate_movement
 
 static bool validate_view_all_sources(UOp** src, size_t count) {
     if (count != 1) return false;
@@ -831,7 +826,7 @@ static void* cb_validate_movement(void* ctx, void* node) {
     // Otherwise, reject (strict parity with Python conditions)
     return (void*)0;
 }
-static void* cb_validate_view_sources(void* ctx, void* node) { (void)ctx; UOp* v=(UOp*)node; UOp* srcs[1]={v->src[0]}; return (void*)(uintptr_t)validate_view_all_sources(srcs,1); }
+static __attribute__((unused)) void* cb_validate_view_sources(void* ctx, void* node) { (void)ctx; UOp* v=(UOp*)node; UOp* srcs[1]={v->src[0]}; return (void*)(uintptr_t)validate_view_all_sources(srcs,1); }
 static void* cb_validate_copy(void* ctx, void* node) { (void)ctx; UOp* c=(UOp*)node; UOp* srcs[2]={c->src[0], c->src[1]}; return (void*)(uintptr_t)validate_copy(srcs,2); }
 static void* cb_validate_allreduce(void* ctx, void* node) { (void)ctx; UOp* a=(UOp*)node; UOp* srcs[2]={a->src[0], a->src[1]}; return (void*)(uintptr_t)validate_allreduce(srcs,2); }
 static void* cb_validate_multi(void* ctx, void* node) { (void)ctx; UOp* m=(UOp*)node; return (void*)(uintptr_t)validate_multi(m->src, m->src_count); }

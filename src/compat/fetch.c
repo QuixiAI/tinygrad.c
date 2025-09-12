@@ -9,7 +9,7 @@
 #include <curl/curl.h>
 typedef struct { FILE* fp; long last; long total; int enable_progress; unsigned long long written; } dl_ctx_t;
 static size_t _write_cb(void* ptr, size_t sz, size_t nm, void* userdata){ dl_ctx_t* c=(dl_ctx_t*)userdata; size_t wr = fwrite(ptr, sz, nm, c->fp); c->written += (unsigned long long)(wr*sz); return wr; }
-static int _xfer_cb(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow){ (void)ultotal; (void)ulnow; dl_ctx_t* c=(dl_ctx_t*)clientp; if (!c->enable_progress) return 0; if (dltotal>0){ if (c->last != (long)dlnow){ tg_tqdm_update((long)dlnow); c->last=(long)dlnow; } } return 0; }
+static int __attribute__((unused)) _xfer_cb(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow){ (void)ultotal; (void)ulnow; dl_ctx_t* c=(dl_ctx_t*)clientp; if (!c->enable_progress) return 0; if (dltotal>0){ if (c->last != (long)dlnow){ tg_tqdm_update((long)dlnow); c->last=(long)dlnow; } } return 0; }
 int tg_fetch_impl(const char* url, const char* out_tmp, int allow_progress){
   CURL* curl = curl_easy_init(); if (!curl) return -1;
   FILE* f = fopen(out_tmp, "wb"); if (!f){ curl_easy_cleanup(curl); return -2; }

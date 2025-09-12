@@ -45,66 +45,42 @@ static void* cb_neg_sub(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if
 static void* cb_mulacc_fold(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->op!=OPS_ADD || n->src_count!=2) return NULL; UOp* left=n->src[0]; UOp* right=n->src[1]; if (left->op==OPS_MUL && left->src_count==2) return uop_mulacc(left->src[0], left->src[1], right); if (right->op==OPS_MUL && right->src_count==2) return uop_mulacc(right->src[0], right->src[1], left); return NULL; }
 
 // (c1<x & x<c2) -> x.eq(c) when c1+1==c2-1
-static void* cb_range_to_eq(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->op!=OPS_AND || n->src_count!=2) return NULL; UOp* a=n->src[0]; UOp* b=n->src[1];
-  if (a->op!=OPS_CMPLT || b->op!=OPS_CMPLT || a->src_count!=2 || b->src_count!=2) return NULL;
-  UOp* c1=a->src[0]; UOp* x1=a->src[1]; UOp* x2=b->src[0]; UOp* c2=b->src[1];
-  // match forms (c1 < x) & (x < c2)
-  if (x1!=x2) return NULL;
-  if (c1->op!=OPS_CONST || c2->op!=OPS_CONST) return NULL;
-  // signed ints only
-  DType sx = dtype_scalar(&x1->dtype); if (!dtypes_is_int(&sx)) return NULL;
-  // extract integer consts
-  double v1 = (c1->arg.type==ARG_CONST)? c1->arg.const_data.const_value : (double)c1->arg.int_data.i;
-  double v2 = (c2->arg.type==ARG_CONST)? c2->arg.const_data.const_value : (double)c2->arg.int_data.i;
-  long long i1 = (long long)llround(v1); long long i2 = (long long)llround(v2);
-  if (i1+1 != i2-1) return NULL;
-  long long c = i1+1;
-  UOp* cconst = uop_const(x1->dtype, (double)c);
-  return uop_eq(x1, cconst);
-}
 
 // Helpers
-static bool is_false_const(UOp* u){ if (!u) return false; if (u->op!=OPS_CONST) return false; if (u->arg.type==ARG_CONST) return u->arg.const_data.const_value==0.0; if (u->arg.type==ARG_INT) return u->arg.int_data.i==0; return false; }
-static bool is_sint_dtype(const DType* dt){ return dtypes_is_int(dt) && !dtypes_is_unsigned(dt); }
-
-// (! (x<sint<c<sint>)) -> (c-1) < x ; (! (c<x)) -> x < (c+1)
-static void* cb_not_cmplts(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->op!=OPS_CMPEQ || n->src_count<2) return NULL; UOp* cmp=n->src[0]; UOp* rhs=n->src[1]; if (!is_false_const(rhs)) return NULL; if (!cmp || cmp->op!=OPS_CMPLT || cmp->src_count<3) return NULL; UOp* a=cmp->src[0]; UOp* b=cmp->src[1];
-  DType sa = dtype_scalar(&a->dtype), sb = dtype_scalar(&b->dtype);
-  if (!(is_sint_dtype(&sa) && is_sint_dtype(&sb))) return NULL;
-  if (a->op!=OPS_CONST && b->op!=OPS_CONST) return NULL;
-  if (a->op==OPS_CONST){ // !(c < x) -> x < (c+1)
-    double vc = (a->arg.type==ARG_CONST)? a->arg.const_data.const_value : (double)a->arg.int_data.i; long long ic=(long long)llround(vc); UOp* cadd = uop_const(b->dtype, (double)(ic+1)); return uop_lt(b, cadd);
-  } else { // !(x < c) -> (c-1) < x
-    double vc = (b->arg.type==ARG_CONST)? b->arg.const_data.const_value : (double)b->arg.int_data.i; long long ic=(long long)llround(vc); UOp* csub = uop_const(a->dtype, (double)(ic-1)); return uop_lt(csub, a);
-  }
-}
-
-// (x*sints*-1 < y*sints*c) -> (y*(-c) < x)
-static void* cb_cmplts_negmulmul(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->op!=OPS_CMPLT || n->src_count<3) return NULL; UOp* l=n->src[0]; UOp* r=n->src[1];
-  DType sl = dtype_scalar(&l->dtype), sr = dtype_scalar(&r->dtype); if(!(is_sint_dtype(&sl) && is_sint_dtype(&sr))) return NULL;
-  // left must be x * -1
-  if (l->op!=OPS_MUL || l->src_count<3) return NULL; UOp* lx=l->src[0]; UOp* lm=l->src[1]; if (!(lm->op==OPS_CONST && lm->arg.type==ARG_CONST && lm->arg.const_data.const_value==-1.0)) return NULL;
-  // right must be y * c (const)
-  if (r->op!=OPS_MUL || r->src_count<3) return NULL; UOp* ry=r->src[0]; UOp* rc=r->src[1]; if (rc->op!=OPS_CONST) return NULL; double vc=(rc->arg.type==ARG_CONST)? rc->arg.const_data.const_value : (double)rc->arg.int_data.i;
-  UOp* negc = uop_const(rc->dtype, -vc);
-  UOp* ynegc = uop_mul(ry, negc);
-  return uop_lt(ynegc, lx);
-}
-
-// (x*sints*-1 < c) -> (-c < x)
-static void* cb_cmplts_negmulc(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->op!=OPS_CMPLT || n->src_count<3) return NULL; UOp* l=n->src[0]; UOp* r=n->src[1]; DType sl = dtype_scalar(&l->dtype), sr = dtype_scalar(&r->dtype); if(!(is_sint_dtype(&sl) && is_sint_dtype(&sr))) return NULL; if (l->op!=OPS_MUL || l->src_count<3) return NULL; UOp* lx=l->src[0]; UOp* lm=l->src[1]; if (!(lm->op==OPS_CONST && lm->arg.type==ARG_CONST && lm->arg.const_data.const_value==-1.0)) return NULL; if (r->op!=OPS_CONST) return NULL; double vc=(r->arg.type==ARG_CONST)? r->arg.const_data.const_value : (double)r->arg.int_data.i; UOp* negc = uop_const(r->dtype, -vc); return uop_lt(negc, lx); }
 
 // (! (x.ne(y))) -> x.cmpeq(y)
-static void* cb_not_ne(void* ctx, void* node){ (void)ctx; UOp* n=(UOp*)node; if (n->op!=OPS_CMPEQ || n->src_count<2) return NULL; UOp* inner=n->src[0]; UOp* rhs=n->src[1]; if (!is_false_const(rhs)) return NULL; if (!inner || inner->op!=OPS_CMPNE || inner->src_count<3) return NULL; UOp* a=inner->src[0]; UOp* b=inner->src[1]; return uop_eq(a,b); }
+/* removed: cb_not_ne (unused simple callback). Named-binding version used below. */
 
 // Named-binding callbacks (ex)
 static void* cb_not_lt_xc_ex(void* ctx, void* node, const char** names, UOp** values, size_t nbinds) {
-    (void)ctx; (void)node; UOp* x=NULL; UOp* c=NULL; for (size_t i=0;i<nbinds;i++){ if (names[i] && strcmp(names[i],"x")==0) x=values[i]; if (names[i] && strcmp(names[i],"c")==0) c=values[i]; }
-    if (!x||!c) return NULL; DType sx=dtype_scalar(&x->dtype); if (!dtypes_is_int(&sx)) return NULL; double vc=(c->arg.type==ARG_CONST)? c->arg.const_data.const_value : (double)c->arg.int_data.i; long long ic=(long long)llround(vc); UOp* csub=uop_const(x->dtype, (double)(ic-1)); return uop_lt(csub, x);
+    (void)ctx; (void)node;
+    UOp* x=NULL; UOp* c=NULL;
+    for (size_t i=0;i<nbinds;i++){
+        if (names[i] && strcmp(names[i],"x")==0) x=values[i];
+        if (names[i] && strcmp(names[i],"c")==0) c=values[i];
+    }
+    if (!x||!c) return NULL;
+    DType sx=dtype_scalar(&x->dtype);
+    if (!dtypes_is_int(&sx)) return NULL;
+    double vc=(c->arg.type==ARG_CONST)? c->arg.const_data.const_value : (double)c->arg.int_data.i;
+    long long ic=(long long)llround(vc);
+    UOp* csub=uop_const(x->dtype, (double)(ic-1));
+    return uop_lt(csub, x);
 }
 static void* cb_not_lt_cx_ex(void* ctx, void* node, const char** names, UOp** values, size_t nbinds) {
-    (void)ctx; (void)node; UOp* x=NULL; UOp* c=NULL; for (size_t i=0;i<nbinds;i++){ if (names[i] && strcmp(names[i],"x")==0) x=values[i]; if (names[i] && strcmp(names[i],"c")==0) c=values[i]; }
-    if (!x||!c) return NULL; DType sx=dtype_scalar(&x->dtype); if (!dtypes_is_int(&sx)) return NULL; double vc=(c->arg.type==ARG_CONST)? c->arg.const_data.const_value : (double)c->arg.int_data.i; long long ic=(long long)llround(vc); UOp* cadd=uop_const(x->dtype, (double)(ic+1)); return uop_lt(x, cadd);
+    (void)ctx; (void)node;
+    UOp* x=NULL; UOp* c=NULL;
+    for (size_t i=0;i<nbinds;i++){
+        if (names[i] && strcmp(names[i],"x")==0) x=values[i];
+        if (names[i] && strcmp(names[i],"c")==0) c=values[i];
+    }
+    if (!x||!c) return NULL;
+    DType sx=dtype_scalar(&x->dtype);
+    if (!dtypes_is_int(&sx)) return NULL;
+    double vc=(c->arg.type==ARG_CONST)? c->arg.const_data.const_value : (double)c->arg.int_data.i;
+    long long ic=(long long)llround(vc);
+    UOp* cadd=uop_const(x->dtype, (double)(ic+1));
+    return uop_lt(x, cadd);
 }
 
 // Build PatternMatcher
@@ -173,12 +149,22 @@ PatternMatcher* get_late_rewrite_patterns(const Ops* available_ops, size_t ops_c
         // callback_ex for range-to-eq
         void* cb_range_to_eq_ex(void* ctx, void* node, const char** names, UOp** values, size_t nbinds) {
           (void)ctx; (void)node; UOp* xv=NULL; UOp* c1v=NULL; UOp* c2v=NULL;
-          for (size_t i=0;i<nbinds;i++){ if (!names[i]) continue; if (strcmp(names[i],"x")==0) xv=values[i]; else if (strcmp(names[i],"c1")==0) c1v=values[i]; else if (strcmp(names[i],"c2")==0) c2v=values[i]; }
-          if (!xv||!c1v||!c2v) return NULL; DType sx=dtype_scalar(&xv->dtype); if (!dtypes_is_int(&sx)) return NULL;
+          for (size_t i=0;i<nbinds;i++){
+            if (!names[i]) continue;
+            if (strcmp(names[i],"x")==0) xv=values[i];
+            else if (strcmp(names[i],"c1")==0) c1v=values[i];
+            else if (strcmp(names[i],"c2")==0) c2v=values[i];
+          }
+          if (!xv||!c1v||!c2v) return NULL;
+          DType sx=dtype_scalar(&xv->dtype);
+          if (!dtypes_is_int(&sx)) return NULL;
           double v1=(c1v->arg.type==ARG_CONST)? c1v->arg.const_data.const_value : (double)c1v->arg.int_data.i;
           double v2=(c2v->arg.type==ARG_CONST)? c2v->arg.const_data.const_value : (double)c2v->arg.int_data.i;
-          long long i1=(long long)llround(v1), i2=(long long)llround(v2); if (i1+1 != i2-1) return NULL;
-          long long c=i1+1; UOp* cconst=uop_const(xv->dtype, (double)c); return uop_eq(xv, cconst);
+          long long i1=(long long)llround(v1), i2=(long long)llround(v2);
+          if (i1+1 != i2-1) return NULL;
+          long long c=i1+1;
+          UOp* cconst=uop_const(xv->dtype, (double)c);
+          return uop_eq(xv, cconst);
         }
         ADD_ENTRY_EX(pand, cb_range_to_eq_ex);
         // named captures for not (x < c)
@@ -190,12 +176,38 @@ PatternMatcher* get_late_rewrite_patterns(const Ops* available_ops, size_t ops_c
         UPat* y = upat_var_named("y", sints, 4, false);
         UPat* m_yc_src[2] = { y, c }; UPat* m_yc = upat_op(OPS_MUL, m_yc_src, 2);
         UPat* lt_muls_src[2] = { m_xneg, m_yc }; UPat* lt_muls = upat_op(OPS_CMPLT, lt_muls_src, 2);
-        void* cb_cmplts_negmulmul_ex(void* ctx, void* node, const char** names, UOp** values, size_t nbinds){ (void)ctx; (void)node; UOp* xv=NULL; UOp* yv=NULL; UOp* cv=NULL; for(size_t i=0;i<nbinds;i++){ if (!names[i]) continue; if (strcmp(names[i],"x")==0) xv=values[i]; else if (strcmp(names[i],"y")==0) yv=values[i]; else if (strcmp(names[i],"c")==0) cv=values[i]; }
-          if(!xv||!yv||!cv) return NULL; DType sx=dtype_scalar(&xv->dtype); if(!dtypes_is_int(&sx)) return NULL; double vc=(cv->arg.type==ARG_CONST)? cv->arg.const_data.const_value : (double)cv->arg.int_data.i; UOp* negc=uop_const(cv->dtype, -vc); UOp* ynegc=uop_mul(yv, negc); return uop_lt(ynegc, xv); }
+        void* cb_cmplts_negmulmul_ex(void* ctx, void* node, const char** names, UOp** values, size_t nbinds){
+          (void)ctx; (void)node; UOp* xv=NULL; UOp* yv=NULL; UOp* cv=NULL;
+          for(size_t i=0;i<nbinds;i++){
+            if (!names[i]) continue;
+            if (strcmp(names[i],"x")==0) xv=values[i];
+            else if (strcmp(names[i],"y")==0) yv=values[i];
+            else if (strcmp(names[i],"c")==0) cv=values[i];
+          }
+          if(!xv||!yv||!cv) return NULL;
+          DType sx=dtype_scalar(&xv->dtype);
+          if(!dtypes_is_int(&sx)) return NULL;
+          double vc=(cv->arg.type==ARG_CONST)? cv->arg.const_data.const_value : (double)cv->arg.int_data.i;
+          UOp* negc=uop_const(cv->dtype, -vc);
+          UOp* ynegc=uop_mul(yv, negc);
+          return uop_lt(ynegc, xv);
+        }
         ADD_ENTRY_EX(lt_muls, cb_cmplts_negmulmul_ex);
         UPat* lt_mulc_src[2] = { m_xneg, c }; UPat* lt_mulc = upat_op(OPS_CMPLT, lt_mulc_src, 2);
-        void* cb_cmplts_negmulc_ex(void* ctx, void* node, const char** names, UOp** values, size_t nbinds){ (void)ctx; (void)node; UOp* xv=NULL; UOp* cv=NULL; for(size_t i=0;i<nbinds;i++){ if (!names[i]) continue; if (strcmp(names[i],"x")==0) xv=values[i]; else if (strcmp(names[i],"c")==0) cv=values[i]; }
-          if(!xv||!cv) return NULL; DType sx=dtype_scalar(&xv->dtype); if(!dtypes_is_int(&sx)) return NULL; double vc=(cv->arg.type==ARG_CONST)? cv->arg.const_data.const_value : (double)cv->arg.int_data.i; UOp* negc=uop_const(cv->dtype, -vc); return uop_lt(negc, xv); }
+        void* cb_cmplts_negmulc_ex(void* ctx, void* node, const char** names, UOp** values, size_t nbinds){
+          (void)ctx; (void)node; UOp* xv=NULL; UOp* cv=NULL;
+          for(size_t i=0;i<nbinds;i++){
+            if (!names[i]) continue;
+            if (strcmp(names[i],"x")==0) xv=values[i];
+            else if (strcmp(names[i],"c")==0) cv=values[i];
+          }
+          if(!xv||!cv) return NULL;
+          DType sx=dtype_scalar(&xv->dtype);
+          if(!dtypes_is_int(&sx)) return NULL;
+          double vc=(cv->arg.type==ARG_CONST)? cv->arg.const_data.const_value : (double)cv->arg.int_data.i;
+          UOp* negc=uop_const(cv->dtype, -vc);
+          return uop_lt(negc, xv);
+        }
         ADD_ENTRY_EX(lt_mulc, cb_cmplts_negmulc_ex);
     }
     if (ops_has(available_ops, ops_count, OPS_CMPEQ)) {

@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <math.h>
+#include <ctype.h>
 
 np_array_t* np_frombuffer(void* buffer, size_t size, const DType* dtype) {
     np_array_t* arr = calloc(1, sizeof(np_array_t));

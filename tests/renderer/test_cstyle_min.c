@@ -13,10 +13,9 @@ TEST(test_renderer_cstyle_clang_minimal) {
   TEST_ASSERT_NOT_NULL(r->render);
   char* src = r->render(r, NULL, 0);
   TEST_ASSERT_NOT_NULL(src);
-  TEST_ASSERT_NOT_EQUAL(-1, (int)strstr(src, "kernel_main") - (int)src);
+  TEST_ASSERT_NOT_NULL(strstr(src, "kernel_main"));
   free(src);
   free(r);
 }
 
 TEST_MAIN()
-

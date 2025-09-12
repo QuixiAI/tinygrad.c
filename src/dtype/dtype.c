@@ -115,13 +115,16 @@ DType dtype_vec(const DType* dt, int sz) {
     vec_dt.itemsize *= sz;
     vec_dt.count = sz;
     vec_dt._scalar = dt;
-    // Update name using canonical base name
+    // Update name using canonical base name; write directly into vec_dt.name to
+    // avoid intermediate larger buffers that may trigger fortify warnings.
     const char* base = dtype_canonical_name(dt);
-    char vec_name[64];
-    int written = snprintf(vec_name, sizeof(vec_name), "%s%d", base ? base : dt->name, sz);
-    if (written >= (int)sizeof(vec_name)) vec_name[sizeof(vec_name) - 1] = '\0';
-    strncpy(vec_dt.name, vec_name, sizeof(vec_dt.name) - 1);
-    vec_dt.name[sizeof(vec_dt.name) - 1] = '\0';
+    const char* bname = base ? base : dt->name;
+    // ensure we don't truncate in the middle of the digits; bound base length explicitly
+    char tmp_digits[32];
+    int nd = snprintf(tmp_digits, sizeof(tmp_digits), "%d", sz);
+    if (nd < 0) nd = 0;
+    size_t max_base = (sizeof(vec_dt.name) - 1 > (size_t)nd) ? (sizeof(vec_dt.name) - 1 - (size_t)nd) : 0;
+    snprintf(vec_dt.name, sizeof(vec_dt.name), "%.*s%d", (int)max_base, bname, sz);
     vec_dt.fmt = 0;
     // store in cache
     if (cache_n < (int)(sizeof(cache)/sizeof(cache[0]))) {

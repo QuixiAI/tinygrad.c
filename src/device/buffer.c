@@ -228,7 +228,8 @@ tg_memview_t tg_buffer_as_buffer(tg_buffer_t* buf, int allow_zero_copy, int forc
 }
 
 struct np_array* tg_buffer_numpy(tg_buffer_t* buf){
-  if (!buf) return NULL; tg_memview_t mv = tg_buffer_as_buffer(buf, 0, 0);
+  if (!buf) return NULL;
+  tg_memview_t mv = tg_buffer_as_buffer(buf, 0, 0);
   return np_frombuffer(mv.data, mv.nbytes, buf->dtype);
 }
 

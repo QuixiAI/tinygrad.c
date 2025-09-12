@@ -58,36 +58,6 @@ tg_uop_t* tg_uop_reduce_axis(tg_uop_t* src, int reduce_op, int* axes, int axes_c
   return uop_reduce_axis(src, (Ops)reduce_op, axes, axes_count);
 }
 
-// Minimal recursive evaluator for substitute
-static float exec_alu_min(Ops op, float* a, int n){
-  switch(op){
-    case OPS_LOG2: return log2f(a[0]); case OPS_EXP2: return exp2f(a[0]); case OPS_SQRT: return sqrtf(a[0]);
-    case OPS_RECIP: return 1.0f/a[0]; case OPS_SIN: return sinf(a[0]); case OPS_NEG: return -a[0];
-    case OPS_ADD: return a[0]+a[1]; case OPS_SUB: return a[0]-a[1]; case OPS_MUL: return a[0]*a[1];
-    case OPS_FDIV: return a[1]==0.0f? INFINITY : a[0]/a[1]; case OPS_POW: return powf(a[0], a[1]); case OPS_MAX: return fmaxf(a[0], a[1]);
-    case OPS_WHERE: return a[0]!=0.0f ? a[1] : a[2]; case OPS_CMPLT: return a[0]<a[1]; case OPS_CMPNE: return a[0]!=a[1]; case OPS_CMPEQ: return a[0]==a[1];
-    case OPS_CONST: return a[0];
-    // treat meta/movement/casts as identity for scalar eval
-    case OPS_CAST: case OPS_CONTIGUOUS: case OPS_FUSE: case OPS_CONTIGUOUS_BACKWARD:
-    case OPS_RESHAPE: case OPS_PERMUTE: case OPS_EXPAND: case OPS_PAD: case OPS_SHRINK:
-      return a[0];
-    default: return a[0]; }
-}
-
-static float evaluate_with_subs(tg_uop_t* u, tg_uop_t** vars, tg_uop_t** vals, int nvars){
-  if (!u) return NAN;
-  if (u->op == OPS_CONST && u->arg.type==ARG_CONST) return (float)u->arg.const_data.const_value;
-  if (u->op == OPS_DEFINE_VAR){
-    for (int i=0;i<nvars;i++) if (u==vars[i]) {
-      tg_uop_t* v = vals[i];
-      return (v && v->op==OPS_CONST && v->arg.type==ARG_CONST) ? (float)v->arg.const_data.const_value : NAN;
-    }
-    return 0.0f;
-  }
-  float ops[3]={0};
-  for (size_t i=0;i<u->src_count && i<3;i++) ops[i]=evaluate_with_subs(u->src[i], vars, vals, nvars);
-  return exec_alu_min(u->op, ops, (int)u->src_count);
-}
 
 tg_uop_t* tg_uop_substitute(tg_uop_t* uop, tg_substitution_t* substitutions, int count){
   // Evaluate the expression using the interpreter with variable bindings

@@ -1,5 +1,6 @@
 #include "test_common.h"
 #include "device/device.h"
+#include "helpers/helpers.h"
 #include <string.h>
 #include <stdlib.h>
 

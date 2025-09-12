@@ -32,7 +32,12 @@ static tg_uop_t* grad_permute(tg_uop_t* ctx, tg_uop_t* t0) {
   // invert axes
   int n = t0->arg.reduce_data.axes_count; if (n<=0 || !t0->arg.reduce_data.axes) return ctx;
   int* inv = (int*)malloc(sizeof(int)*n);
-  for (int i=0;i<n;i++) inv[i]=0; for (int i=0;i<n;i++) { int a=t0->arg.reduce_data.axes[i]; if (a<0) a+=n; inv[a]=i; }
+  for (int i=0;i<n;i++) inv[i]=0;
+  for (int i=0;i<n;i++) {
+    int a=t0->arg.reduce_data.axes[i];
+    if (a<0) a+=n;
+    inv[a]=i;
+  }
   tg_uop_t* r = tg_uop_permute(ctx, inv, n); free(inv); return r;
 }
 static tg_uop_t* grad_expand(tg_uop_t* ctx, tg_uop_t* src, tg_uop_t* out) {
@@ -63,50 +68,7 @@ static tg_uop_t* grad_shrink(tg_uop_t* ctx, tg_uop_t* t0) {
   for (int i=0;i<nd;i++) { int32_t st=t0->arg.shrink_data.start[i]; int32_t ed=t0->arg.shrink_data.end[i]; if (ed<0) ed=ishp[i]; before[i]=st; after[i]=ishp[i]-ed; }
   tg_uop_t* r = tg_uop_pad(ctx, before, after, nd); free(before); free(after); return r;
 }
-static tg_uop_t* reduce_to_operand(tg_uop_t* ctx, tg_uop_t* out_op, tg_uop_t* src) {
-  // derive broadcasted output shape from both operands
-  int nd0=0, nd1=0, nds=0; const int32_t* s0=NULL; const int32_t* s1=NULL; const int32_t* ss=NULL;
-  s0 = uop_shape(out_op->src[0], &nd0); s1 = uop_shape(out_op->src[1], &nd1); ss = uop_shape(src, &nds);
-  if (!s0 || !s1 || !ss) return ctx;
-  int nd = nd0>nd1? nd0: nd1;
-  int32_t* so = (int32_t*)malloc(sizeof(int32_t)*nd);
-  for (int i=0;i<nd;i++){
-    int idx0 = i - (nd - nd0);
-    int idx1 = i - (nd - nd1);
-    int d0 = idx0<0 ? 1 : s0[idx0];
-    int d1 = idx1<0 ? 1 : s1[idx1];
-    so[i] = d0==1 ? d1 : d0;
-  }
-  // map src dims to broadcast dims aligned right
-  int* axes = (int*)malloc(sizeof(int)*nd); int axc=0;
-  for (int i=0;i<nd;i++){
-    int idxs = i - (nd - nds);
-    int ds = idxs<0 ? 1 : ss[idxs];
-    if (ds==1 && so[i]>1) axes[axc++]=i;
-  }
-  if (getenv("DEBUG_GRAD")) {
-    fprintf(stderr, "reduce_to_operand: so=["); for(int i=0;i<nd;i++) fprintf(stderr, "%d%s", so[i], i==nd-1?"]":" ");
-    fprintf(stderr, ", ss=["); for(int i=0;i<nds;i++) fprintf(stderr, "%d%s", ss[i], i==nds-1?"]":" ");
-    fprintf(stderr, ", axes="); for(int i=0;i<axc;i++) fprintf(stderr, "%d%s", axes[i], i==axc-1?"":" "); fprintf(stderr, "\n");
-  }
-  if (getenv("DEBUG_GRAD")) {
-    fprintf(stderr, "reduce_to_operand: nd=%d nd0=%d nd1=%d nds=%d axc=%d\n", nd, nd0, nd1, nds, axc);
-  }
-  tg_uop_t* r = ctx; if (axc>0) {
-    int nctx=0; const int32_t* sctx = uop_shape(ctx, &nctx);
-    if (sctx && nctx==nd) {
-      r = tg_uop_reduce_axis(ctx, OPS_ADD, axes, axc);
-    } else {
-      // Broadcast scalar ctx to output shape then reduce on axes
-      int32_t* ones = (int32_t*)malloc(sizeof(int32_t)*nd); for(int i=0;i<nd;i++) ones[i]=1;
-      tg_uop_t* bex = tg_uop_expand(tg_uop_reshape(ctx, ones, nd), so, nd);
-      free(ones);
-      r = tg_uop_reduce_axis(bex, OPS_ADD, axes, axc);
-    }
-    r = tg_uop_reshape(r, ss, nds);
-  }
-  free(axes); free(so); return r;
-}
+/* removed unused reduce_to_operand: dead code in this port */
 
 // reduce_gradient(ctx, ret) — movement and simple reduce handling
 static tg_uop_t** reduce_gradient(tg_uop_t* ctx, tg_uop_t* ret, int* out_count){
@@ -181,7 +143,7 @@ static tg_uop_t** pm_rules(tg_uop_t* t0, tg_uop_t* ctx, int* out_count){
     case OPS_REDUCE_AXIS: lgrads=reduce_gradient(ctx, t0, out_count); break;
     case OPS_CONTIGUOUS: case OPS_FUSE: lgrads=calloc(1,sizeof(*lgrads)); *out_count=1; lgrads[0]=ctx; break;
     case OPS_CONTIGUOUS_BACKWARD: lgrads=calloc(1,sizeof(*lgrads)); *out_count=1; lgrads[0]=tg_uop_contiguous(ctx); break;
-    case OPS_MULTI: lgrads=calloc(t0->src_count,sizeof(*lgrads)); *out_count=t0->src_count; for(int i=0;i<t0->src_count;i++) lgrads[i]=ctx; break; // shard TODO
+    case OPS_MULTI: lgrads=calloc(t0->src_count,sizeof(*lgrads)); *out_count=(int)t0->src_count; for(size_t i=0;i<t0->src_count;i++) lgrads[i]=ctx; break; // shard TODO
     case OPS_BITCAST: lgrads=calloc(1,sizeof(*lgrads)); *out_count=1; lgrads[0]=NULL; break;
     default: return NULL;
   }
@@ -193,7 +155,7 @@ static tg_uop_t** _deepwalk(tg_uop_t* root, tg_uop_t** targets, int target_count
   int n=0; tg_uop_t** topo = tg_uop_toposort(root, &n); bool* in_path = calloc(n,sizeof(bool));
   for(int i=0;i<n;i++){
     tg_uop_t* u = topo[i]; bool ip=false;
-    for(int j=0;j<u->src_count && !ip;j++){
+    for(size_t j=0;j<u->src_count && !ip;j++){
       tg_uop_t* s = u->src[j];
       for(int t=0;t<target_count && !ip;t++) if (s==targets[t]) ip=true;
       if(!ip){ for(int k=0;k<i;k++) if (topo[k]==s && in_path[k]) { ip=true; break; } }
@@ -211,7 +173,8 @@ static gradient_dict_t* compute_gradient_full(tg_uop_t* root, tg_uop_t* root_gra
   int wc=0; tg_uop_t** walk = _deepwalk(root, targets, target_count, &wc);
   for(int i=wc-1;i>=0;i--){ tg_uop_t* t0=walk[i]; if(!gradient_dict_contains(grads,t0)) continue; tg_uop_t* grad_t0=gradient_dict_get(grads,t0);
     int lgc=0; tg_uop_t** lgrads = pm_rules(t0, grad_t0, &lgc); if(!lgrads){ free(walk); gradient_dict_free(grads); return NULL; }
-    for(int j=0;j<t0->src_count;j++){ tg_uop_t* k=t0->src[j]; tg_uop_t* v=lgrads[j]; if(!v) continue; tg_uop_t* ex=gradient_dict_get(grads,k); gradient_dict_set(grads,k, ex? tg_uop_add(ex,v) : v); }
+    size_t mj = t0->src_count < (size_t)lgc ? t0->src_count : (size_t)lgc;
+    for(size_t j=0;j<mj;j++){ tg_uop_t* k=t0->src[j]; tg_uop_t* v=lgrads[j]; if(!v) continue; tg_uop_t* ex=gradient_dict_get(grads,k); gradient_dict_set(grads,k, ex? tg_uop_add(ex,v) : v); }
     free(lgrads);
   }
   free(walk); return grads;

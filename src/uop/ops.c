@@ -489,9 +489,7 @@ UOp* uop_const_ex(DType dtype, double value, UOp* device_uop, const int32_t* sha
 UOp* uop_define_global(DType dtype, int idx) {
     UOpArg arg = {.type = ARG_INT, .int_data.i = idx};
     UOp* u = uop_new(OPS_DEFINE_GLOBAL, dtype, NULL, 0, &arg, NULL);
-    // Attach st shape from pointer size if >0
-    const PtrDType* pd = (const PtrDType*)&dtype; int sz = pd->size;
-    if (sz > 0) { int32_t shp[1] = { (int32_t)sz }; u->st = shapetracker_from_shape(shp, 1); }
+    // Note: Avoid type-punning DType into PtrDType; attach no shape here.
     // Attach spec dtype metadata for parity
     spec_attach_define_meta(u, ADDRSPACE_GLOBAL);
     return u;
@@ -500,8 +498,8 @@ UOp* uop_define_global(DType dtype, int idx) {
 UOp* uop_define_local(DType dtype, size_t size) {
     UOpArg arg = {.type = ARG_INT, .int_data.i = (int)size};
     UOp* u = uop_new(OPS_DEFINE_LOCAL, dtype, NULL, 0, &arg, NULL);
-    const PtrDType* pd = (const PtrDType*)&dtype; int sz = pd->size;
-    if (sz > 0) { int32_t shp[1] = { (int32_t)sz }; u->st = shapetracker_from_shape(shp, 1); }
+    // Attach shape from provided size (elements) if non-zero
+    if (size > 0) { int32_t shp[1] = { (int32_t)size }; u->st = shapetracker_from_shape(shp, 1); }
     // Attach spec dtype metadata for parity
     spec_attach_define_meta(u, ADDRSPACE_LOCAL);
     return u;
@@ -510,8 +508,7 @@ UOp* uop_define_local(DType dtype, size_t size) {
 UOp* uop_define_reg(DType dtype) {
     UOpArg arg = {0};
     UOp* u = uop_new(OPS_DEFINE_REG, dtype, NULL, 0, &arg, NULL);
-    const PtrDType* pd = (const PtrDType*)&dtype; int sz = pd->size;
-    if (sz > 0) { int32_t shp[1] = { (int32_t)sz }; u->st = shapetracker_from_shape(shp, 1); }
+    // No shape attached for registers (scalars by definition here)
     // Attach spec dtype metadata for parity (REG)
     spec_attach_define_meta(u, ADDRSPACE_REG);
     return u;
@@ -747,7 +744,8 @@ UOp* uop_wmma(UOp* a, UOp* b, UOp* acc, const int* first, const int* second, int
     }
     arg.tuple2.first = f; arg.tuple2.second = s;
     UOp* u = uop_new(OPS_WMMA, acc->dtype, srcs, 3, &arg, NULL);
-    if (f) free(f); if (s) free(s);
+    if (f) free(f);
+    if (s) free(s);
     return u;
 }
 
@@ -762,7 +760,8 @@ UOp* uop_contract(UOp* x, const int* first, const int* second, int count) {
     }
     arg.tuple2.first = f; arg.tuple2.second = s;
     UOp* u = uop_new(OPS_CONTRACT, x->dtype, srcs, 1, &arg, NULL);
-    if (f) free(f); if (s) free(s);
+    if (f) free(f);
+    if (s) free(s);
     return u;
 }
 
@@ -777,7 +776,8 @@ UOp* uop_unroll(UOp* x, const int* first, const int* second, int count) {
     }
     arg.tuple2.first = f; arg.tuple2.second = s;
     UOp* u = uop_new(OPS_UNROLL, x->dtype, srcs, 1, &arg, NULL);
-    if (f) free(f); if (s) free(s);
+    if (f) free(f);
+    if (s) free(s);
     return u;
 }
 
@@ -1099,8 +1099,6 @@ UOp** uop_toposort(UOp* root, size_t* count) {
 UOp** uop_toposort_gate(UOp* root, size_t* count, bool (*gate)(UOp*)) {
     // DFS with gate predicate (if gate is NULL, treat as always true)
     struct TopoSortState state = {NULL, 0, 0, NULL, 0, 0};
-    // Local stack for DFS
-    UOp** stack = NULL; size_t stack_size=0, stack_cap=0;
     // manual stack DFS to honor gate
     // use a simple recursion wrapper
     void dfs(UOp* node){
@@ -1546,7 +1544,7 @@ UOp* uop_simplify(UOp* uop) {
             UOp* mul = (l->op==OPS_MUL)? l : (r->op==OPS_MUL? r: NULL);
             UOp* other = (mul==l)? r : (mul==r? l: NULL);
             if (mul && mul->src_count==2 && other) {
-                UOp* mc=NULL,*mv=NULL; if (mul->src[0]->op==OPS_CONST){ mc=mul->src[0]; mv=mul->src[1]; } else if (mul->src[1]->op==OPS_CONST){ mc=mul->src[1]; mv=mul->src[0]; }
+                UOp* mc=NULL; if (mul->src[0]->op==OPS_CONST){ mc=mul->src[0]; } else if (mul->src[1]->op==OPS_CONST){ mc=mul->src[1]; }
                 if (mc && mc->arg.type==ARG_CONST && fabs(mc->arg.const_data.const_value - (double)(1ULL<<32))<0.5) {
                     if (other->op == OPS_CAST && dtype_eq(&other->dtype, &dtypes.uint64) && other->src_count==1 && dtype_eq(&other->src[0]->dtype, &dtypes.uint32)) {
                         return uop_ref(other->src[0]);

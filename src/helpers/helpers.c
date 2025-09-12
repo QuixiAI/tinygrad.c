@@ -189,7 +189,10 @@ static int _color_index(const char* color){
   if (!color) return -1;
   char buf[16]={0}; size_t n=strlen(color); if (n>15) n=15; for(size_t i=0;i<n;i++) buf[i]=tolower((unsigned char)color[i]);
   const char* names[] = {"black","red","green","yellow","blue","magenta","cyan","white"};
-  for (int i=0;i<8;i++) if (strcmp(buf,names[i])==0) return i; return -1;
+  for (int i=0;i<8;i++) {
+    if (strcmp(buf,names[i])==0) return i;
+  }
+  return -1;
 }
 
 char* tg_colored(const char* st, const char* color, int background){
@@ -238,7 +241,8 @@ char* tg_time_to_str(double t, int w){
 }
 
 char* tg_strip_parens(const char* s){
-  if (!s) return strdup(""); size_t n=strlen(s);
+  if (!s) return strdup("");
+  size_t n=strlen(s);
   if (n>=2 && s[0]=='(' && s[n-1]==')'){
     // check simple balance condition similar to reference
     int has_open=0, has_close=0; for(size_t i=1;i<n-1;i++){ if(s[i]=='(') {has_open=1; break;} }
@@ -249,7 +253,8 @@ char* tg_strip_parens(const char* s){
 }
 
 char* tg_word_wrap(const char* s, int wrap){
-  if (!s) return strdup(""); if (wrap<=0) return strdup(s);
+  if (!s) return strdup("");
+  if (wrap<=0) return strdup(s);
   // Strip ANSI for length decisions
   char* plain = tg_ansistrip(s);
   int n = (int)strlen(plain);
@@ -369,7 +374,13 @@ int tg_cpu_profile_begin(const char* name, const char* device, int is_copy){
   tg_profile_range_event_t e={device?device:"CPU", name?name:"", _now_us(), 0, is_copy}; return _push_prof(&e);
 }
 void tg_cpu_profile_end(int handle, int display){
-  if (handle<0) return; if(handle>=0 && handle<_prof.n){ _prof.v[handle].en_us=_now_us(); if(display && _profile_enabled){ fprintf(stderr, "%s %s %llu us\n", _prof.v[handle].device, _prof.v[handle].name, (unsigned long long)(_prof.v[handle].en_us - _prof.v[handle].st_us)); } }
+  if (handle<0) return;
+  if(handle>=0 && handle<_prof.n){
+    _prof.v[handle].en_us=_now_us();
+    if(display && _profile_enabled){
+      fprintf(stderr, "%s %s %llu us\n", _prof.v[handle].device, _prof.v[handle].name, (unsigned long long)(_prof.v[handle].en_us - _prof.v[handle].st_us));
+    }
+  }
 }
 void tg_profile_set_enabled(int enabled){ _profile_enabled = enabled ? 1 : 0; }
 int  tg_profile_get_enabled(void){ _profile_init_from_env(); return _profile_enabled; }
@@ -425,8 +436,44 @@ static int _file_exists(const char* p){ struct stat st; return (stat(p,&st)==0 &
 static void _mkdir_p(const char* path){ if(!path) return; char tmp[1024]; strncpy(tmp,path,sizeof(tmp)-1); tmp[sizeof(tmp)-1]='\0'; for(char* p=tmp+1; *p; p++){ if(*p=='/'){ *p='\0'; mkdir(tmp,0755); *p='/'; } } mkdir(tmp,0755); }
 static int _is_tinybox(void){ FILE* f=fopen("/etc/tinybox-release","r"); if(f){ fclose(f); return 1;} return 0; }
 static const char* _downloads_root(void){ return _is_tinybox()? "/raid/downloads" : "build/downloads"; }
-static void _join2(char* out, size_t n, const char* a, const char* b){ if (!b||!*b){ snprintf(out,n,"%s", a); } else { snprintf(out,n,"%s/%s", a, b); } }
-static void _join3(char* out, size_t n, const char* a, const char* b, const char* c){ char t[1024]; _join2(t,sizeof(t),a,b); _join2(out,n,t,c); }
+static void _join2(char* out, size_t n, const char* a, const char* b){
+  if (!out || n==0) return;
+  out[0] = '\0';
+  if (!a) a = "";
+  if (!b || !*b) {
+    size_t la = strnlen(a, n-1);
+    memcpy(out, a, la);
+    out[la] = '\0';
+  } else {
+    size_t la = strnlen(a, n-1);
+    memcpy(out, a, la);
+    size_t pos = la;
+    if (pos < n-1) out[pos++] = '/';
+    size_t rem = (pos < n) ? (n - 1 - pos) : 0;
+    if (rem > 0) {
+      size_t lb = strnlen(b, rem);
+      memcpy(out + pos, b, lb);
+      pos += lb;
+    }
+    out[pos] = '\0';
+  }
+}
+static void _append_suffix(char* out, size_t n, const char* base, const char* suffix){
+  if (!out || n==0) return;
+  out[0] = '\0';
+  if (!base) base = "";
+  size_t lb = strnlen(base, n-1);
+  memcpy(out, base, lb);
+  size_t pos = lb;
+  if (suffix && *suffix && pos < n-1) {
+    size_t rem = n - 1 - pos;
+    size_t ls = strnlen(suffix, rem);
+    memcpy(out + pos, suffix, ls);
+    pos += ls;
+  }
+  out[pos] = '\0';
+}
+static void __attribute__((unused)) _join3(char* out, size_t n, const char* a, const char* b, const char* c){ char t[1024]; _join2(t,sizeof(t),a,b); _join2(out,n,t,c); }
 static const char* _basename(const char* s){ const char* p=strrchr(s,'/'); return p? p+1 : s; }
 
 int tg_fetch(const char* url, const char* name, const char* subdir, int gunzip, int allow_caching,
@@ -438,7 +485,7 @@ int tg_fetch(const char* url, const char* name, const char* subdir, int gunzip, 
   if (_is_local_path(url)){
     if (dbg) fprintf(stderr, "tg_fetch: treating as local path\n");
     // optional gunzip of local file
-    if (gunzip){ char out_gz[1024]; snprintf(out_gz,sizeof(out_gz),"%s.gunzip", url);
+    if (gunzip){ char out_gz[1024]; _append_suffix(out_gz,sizeof(out_gz), url, ".gunzip");
       // ensure directory exists
       char dir[1024]; strncpy(dir,out_gz,sizeof(dir)-1); dir[sizeof(dir)-1]='\0'; char* slash=strrchr(dir,'/'); if(slash){ *slash='\0'; _mkdir_p(dir); }
       int rc = tg_gunzip_impl(url, out_gz); if (rc!=0) { /*fprintf(stderr, "tg_fetch local gunzip failed %d from %s to %s\n", rc, url, out_gz);*/ return rc; } snprintf(out_path,out_sz,"%s", out_gz); return 0; }
@@ -447,12 +494,12 @@ int tg_fetch(const char* url, const char* name, const char* subdir, int gunzip, 
   if (dbg) fprintf(stderr, "tg_fetch: treating as remote URL\n");
   // Determine downloads directory
   char root[1024]; snprintf(root,sizeof(root),"%s", _downloads_root());
-  if (subdir && *subdir){ char tmp[1024]; _join2(tmp,sizeof(tmp),root,subdir); snprintf(root,sizeof(root),"%s", tmp); }
+  if (subdir && *subdir){ char tmp[1024]; _join2(tmp,sizeof(tmp),root,subdir); strncpy(root,tmp,sizeof(root)-1); root[sizeof(root)-1]='\0'; }
   _mkdir_p(root);
   // Determine filename
   const char* base = name && *name ? name : _basename(url);
   char final[1024]; _join2(final,sizeof(final),root,base);
-  if (gunzip){ char tmp[1024]; snprintf(tmp,sizeof(tmp),"%s.gunzip", final); snprintf(final,sizeof(final),"%s", tmp); }
+  if (gunzip){ char tmp[1024]; _append_suffix(tmp,sizeof(tmp), final, ".gunzip"); strncpy(final,tmp,sizeof(final)-1); final[sizeof(final)-1]='\0'; }
   // Caching: if allowed and file exists, return it
   int http_cache_disabled = (tg_getenv("DISABLE_HTTP_CACHE") && *tg_getenv("DISABLE_HTTP_CACHE"));
   if (allow_caching && !http_cache_disabled && _file_exists(final)){ snprintf(out_path,out_sz,"%s", final); return 0; }
@@ -464,7 +511,7 @@ int tg_fetch(const char* url, const char* name, const char* subdir, int gunzip, 
   if (enable_progress){ tg_tqdm_end(); }
   if (frc!=0) return frc;
   // Gunzip if requested
-  if (gunzip){ char tmpout[1024]; snprintf(tmpout,sizeof(tmpout),"%s.tmpgunzip", final); int grc = tg_gunzip_impl(tmpdl, tmpout); if (grc!=0){ remove(tmpdl); return grc; } remove(tmpdl); rename(tmpout, final); }
+  if (gunzip){ char tmpout[1024]; _append_suffix(tmpout,sizeof(tmpout), final, ".tmpgunzip"); int grc = tg_gunzip_impl(tmpdl, tmpout); if (grc!=0){ remove(tmpdl); return grc; } remove(tmpdl); rename(tmpout, final); }
   else { rename(tmpdl, final); }
   snprintf(out_path,out_sz,"%s", final); return 0;
 }

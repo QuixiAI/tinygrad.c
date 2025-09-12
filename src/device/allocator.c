@@ -25,7 +25,7 @@ static int   cpu_as_dmaref_cpu(const void* opaque, size_t nbytes, tg_dma_cpu_ref
   return 0;
 }
 
-static tg_allocator_t k_cpu_allocator = {
+static __attribute__((unused)) tg_allocator_t k_cpu_allocator = {
   .alloc = cpu_alloc,
   .free = cpu_free,
   .copyin = cpu_copyin,

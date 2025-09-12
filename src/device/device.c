@@ -77,7 +77,6 @@ const tg_allocator_t* tg_device_get_allocator(const char* device_str){
 static char* default_device = NULL;
 static int compiler_cache_enabled = 1;  // Python default: DISABLE_COMPILER_CACHE=False means enabled
 static int allow_device_usage = 1;      // mirrors Python ALLOW_DEVICE_USAGE
-static int* _allow_usage_ptr(void){ return &allow_device_usage; }
 void tg_device_set_allow_usage(int allow){ allow_device_usage = (allow!=0); }
 
 // Compiler structure

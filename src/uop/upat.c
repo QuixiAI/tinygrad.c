@@ -12,7 +12,7 @@
 
 // Meta keys used to store CUSTOM formatting strings and bindings
 static const char* META_CUSTOM_FMT = "custom_fmt";
-static const char* META_BIND_DTYPE = "bind_dtype";
+static const char* __attribute__((unused)) META_BIND_DTYPE = "bind_dtype";
 static const char* META_NOOP_STR = "noop_str";
 
 // Forward declarations
@@ -21,7 +21,7 @@ typedef struct Context {
 } Context;
 
 // Helper functions (would come from tinygrad/helpers)
-static size_t max_val(size_t a, size_t b) { return a > b ? a : b; }
+static __attribute__((unused)) size_t max_val(size_t a, size_t b) { return a > b ? a : b; }
 
 // UPat creation functions
 void upat_init(UPat* pat) {
@@ -104,7 +104,8 @@ UOp* upat_get_clause(UPat* self, UOp* base, int depth) {
             for (size_t i=0;i<self->op_list_count;i++){
                 char num[32]; snprintf(num, sizeof(num), "%d", (int)self->op_list[i]);
                 if (strlen(full)+strlen(num)+4 > cap){ cap*=2; full=(char*)realloc(full, cap);} 
-                if (i>0) strcat(full, ", "); strcat(full, num);
+                if (i>0) strcat(full, ", ");
+                strcat(full, num);
             }
             strcat(full, "}");
         } else {
@@ -177,13 +178,15 @@ UOp* upat_get_clause(UPat* self, UOp* base, int depth) {
             for (size_t i=0;i<self->dtype_list_count;i++){
                 const char* name = dtype_name(self->dtype_list[i]); if (!name) name="dtype";
                 size_t need=strlen(fmt)+strlen(name)+6; if (need>cap){cap*=2; fmt=(char*)realloc(fmt,cap);} 
-                if (i>0) strcat(fmt, ", "); strcat(fmt, name);
+                if (i>0) strcat(fmt, ", ");
+                strcat(fmt, name);
             }
             strcat(fmt, "] or {0}.dtype._scalar in [");
             for (size_t i=0;i<self->dtype_list_count;i++){
                 const char* name = dtype_name(self->dtype_list[i]); if (!name) name="dtype";
                 size_t need=strlen(fmt)+strlen(name)+6; if (need>cap){cap*=2; fmt=(char*)realloc(fmt,cap);} 
-                if (i>0) strcat(fmt, ", "); strcat(fmt, name);
+                if (i>0) strcat(fmt, ", ");
+                strcat(fmt, name);
             }
             strcat(fmt, "])");
             UOp* custom_src[1] = {base};
@@ -381,7 +384,7 @@ static UOp* mk_or(UOp** items, size_t count) {
 }
 
 // clone a UOp* array segment
-static UOp** clone_uop_array(UOp** src, size_t n) {
+static __attribute__((unused)) UOp** clone_uop_array(UOp** src, size_t n) {
     UOp** out = (UOp**)malloc(n * sizeof(UOp*));
     if (!out) return NULL;
     memcpy(out, src, n * sizeof(UOp*));
@@ -618,6 +621,7 @@ PatternMatcherResult upat_do_process_and(UOp* a, UOp** out_result) {
         *out_result = uop_ref(a);
     }
     
+    (void)found;
     return PM_OK;
 }
 
@@ -625,7 +629,7 @@ PatternMatcherResult upat_do_process_and(UOp* a, UOp** out_result) {
 PatternMatcher* pm_proc = NULL;  // Will be initialized later
 
 // renderer
-static UOp* wrap(void* ctx, UOp* x) {
+static __attribute__((unused)) UOp* wrap(void* ctx, UOp* x) {
     if (!ctx || !x) return NULL;
     
     // Create context variable
@@ -647,10 +651,16 @@ static const char* get_noop_str(UOp* n) {
 static char* str_printf(const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    char buf[1024];
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_list ap2;
+    va_copy(ap2, ap);
+    int needed = vsnprintf(NULL, 0, fmt, ap);
     va_end(ap);
-    return strdup(buf);
+    if (needed < 0) { va_end(ap2); return strdup(""); }
+    char* buf = (char*)malloc((size_t)needed + 1);
+    if (!buf) { va_end(ap2); return strdup(""); }
+    vsnprintf(buf, (size_t)needed + 1, fmt, ap2);
+    va_end(ap2);
+    return buf;
 }
 
 static char* str_format_template(const char* fmt, const char** args, size_t nargs) {
@@ -1349,9 +1359,9 @@ UPat* upat_group_ops(const bool* mask, UPat** src, size_t src_count) {
 
 UPat* upat_group_all_except(Ops exclude, UPat** src, size_t src_count) {
     UPat* pat = upat_create(); pat->type = UPAT_OP;
-    size_t count=0; for (int op=0; op<OPS_MAX_VALUE; op++) if (op!=exclude) count++;
+    size_t count=0; for (int op=0; op<OPS_MAX_VALUE; op++) if ((Ops)op != exclude) count++;
     pat->op_list=(Ops*)malloc(sizeof(Ops)*count); pat->op_list_count=count;
-    size_t idx=0; for (int op=0; op<OPS_MAX_VALUE; op++) if (op!=exclude) pat->op_list[idx++]=(Ops)op;
+    size_t idx=0; for (int op=0; op<OPS_MAX_VALUE; op++) if ((Ops)op != exclude) pat->op_list[idx++]=(Ops)op;
     if (src_count>0 && src) upat_set_src(pat, src, src_count);
     return pat;
 }
@@ -1363,10 +1373,10 @@ void upat_init_system(void) {
     // pm_renderer would be initialized with patterns
     
     // For now, create empty matchers
-    PatternMatch pm_proc_matches[1] = {{NULL, NULL, NULL}};
+    PatternMatch pm_proc_matches[1] = {{NULL, NULL, NULL, NULL}};
     pm_proc = pattern_matcher_new(pm_proc_matches, 1, false);
     
-    PatternMatch pm_renderer_matches[1] = {{NULL, NULL, NULL}};
+    PatternMatch pm_renderer_matches[1] = {{NULL, NULL, NULL, NULL}};
     pm_renderer = pattern_matcher_new(pm_renderer_matches, 1, false);
 }
 
