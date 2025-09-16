@@ -64,6 +64,8 @@ typedef struct ProgramSpec {
   int uops_count;
   int global_size[3];
   int local_size[3];
+  bool global_size_valid;
+  bool local_size_valid;
   bool has_local;
   char* function_name;
   Variable** vars;
@@ -79,6 +81,14 @@ typedef struct ProgramSpec {
 
 // Populate ProgramSpec derived fields (vars/globals/ins/outs/mem).
 void programspec_finalize(ProgramSpec* spec);
+
+// Resolve launch dimensions given optional variable bindings. Any unset axis is left as 0.
+void ps_launch_dims(const ProgramSpec* spec, UOp** vars, const int* vals, int n,
+                    int out_global[3], int out_local[3]);
+
+// Convenience accessor mirroring Python's ProgramSpec.function_name cached property.
+// Returns owned string (caller frees) if spec/function present, otherwise NULL.
+char* ps_function_name(const ProgramSpec* spec);
 
 #ifdef __cplusplus
 }

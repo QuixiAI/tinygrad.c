@@ -129,6 +129,8 @@ ProgramSpec* get_program(UOp* ast, Renderer* renderer, Opt** opts, int opts_coun
     if (renderer->has_local) {
         spec->global_size[0] = spec->global_size[1] = spec->global_size[2] = 1;
         spec->local_size[0] = spec->local_size[1] = spec->local_size[2] = 1;
+        spec->global_size_valid = true;
+        spec->local_size_valid = true;
     }
     // function_name from name (to_function_name parity)
     spec->function_name = renderer_to_function_name(spec->name);
@@ -247,19 +249,12 @@ float compiled_runner_call(CompiledRunner* self, Buffer** rawbufs, int rawbufs_c
                            Variable** var_keys, int* var_vals, int var_count, bool wait) {
     // Port of line 77: global_size, local_size = self.p.launch_dims(var_vals)
     int global_size[3] = {0,0,0}, local_size[3] = {0,0,0};
-    bool has_global = false, has_local = false;
-    // Basic parity: use sizes from ProgramSpec if set (we currently only store concrete ints)
-    if (self->p->global_size[0] || self->p->global_size[1] || self->p->global_size[2]) {
-        memcpy(global_size, self->p->global_size, sizeof(global_size));
-        has_global = true;
-    }
-    if (self->p->local_size[0] || self->p->local_size[1] || self->p->local_size[2]) {
-        memcpy(local_size, self->p->local_size, sizeof(local_size));
-        has_local = true;
-    }
-    
+    bool has_global = self->p->global_size_valid;
+    bool has_local = self->p->local_size_valid;
+    ps_launch_dims(self->p, (UOp**)var_keys, var_vals, var_count, global_size, local_size);
+
     // Port of line 78-83: optimize local size if needed
-    if (has_global && !has_local && all_int(self->p->global_size, 3)) {
+    if (has_global && !has_local) {
         // Port of line 80-82: optimize_local_size
         // from tinygrad.codegen.opt.search import optimize_local_size
         // local_size = optimize_local_size(self._prg, global_size, rawbufs)

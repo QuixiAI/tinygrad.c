@@ -5,6 +5,7 @@
 #include "dtype/dtype.h"
 #include "engine/realize.h"
 #include <stdlib.h>
+#include <string.h>
 
 TEST(test_renderer_to_function_name_basic) {
   char* s = renderer_to_function_name("kernel name!");
@@ -190,6 +191,94 @@ TEST(test_programspec_field_extraction) {
   free(spec.outs);
   if (spec.vars) free(spec.vars);
   cleanup_nodes(uops, sizeof(uops) / sizeof(uops[0]));
+}
+
+TEST(test_programspec_special_launch_dims) {
+  UOp* gspec = uop_special_ex("gidx0", 0, 8, dtypes.int32);
+  UOp* lspec = uop_special_ex("lidx1", 1, 4, dtypes.int32);
+  UOp* buf = uop_define_global(dtypes.float32, 0);
+  UOp* idx = uop_const(dtypes.int32, 0);
+  UOp* ptr = uop_index(buf, idx);
+  UOp* load = uop_load(ptr, dtypes.float32);
+  UOp* stores[] = {load};
+  UOp* sink = uop_sink(stores, 1);
+
+  UOp* uops[] = {gspec, lspec, buf, idx, ptr, load, sink};
+  ProgramSpec spec = {0};
+  spec.ast = sink;
+  spec.uops = uops;
+  spec.uops_count = (int)(sizeof(uops) / sizeof(uops[0]));
+  spec.has_local = true;
+  spec.global_size[0] = spec.global_size[1] = spec.global_size[2] = 1;
+  spec.local_size[0] = spec.local_size[1] = spec.local_size[2] = 1;
+  spec.global_size_valid = true;
+  spec.local_size_valid = true;
+  spec.estimates = renderer_estimates_from_uops(uops, spec.uops_count, 1);
+  programspec_finalize(&spec);
+
+  TEST_ASSERT_TRUE(spec.global_size_valid);
+  TEST_ASSERT_EQUAL_INT(8, spec.global_size[0]);
+  TEST_ASSERT_TRUE(spec.local_size_valid);
+  TEST_ASSERT_EQUAL_INT(4, spec.local_size[1]);
+
+  int gdim[3] = {0}, ldim[3] = {0};
+  ps_launch_dims(&spec, NULL, NULL, 0, gdim, ldim);
+  TEST_ASSERT_EQUAL_INT(8, gdim[0]);
+  TEST_ASSERT_EQUAL_INT(4, ldim[1]);
+
+  if (spec.globals) free(spec.globals);
+  if (spec.ins) free(spec.ins);
+  if (spec.outs) free(spec.outs);
+  if (spec.vars) free(spec.vars);
+  cleanup_nodes(uops, sizeof(uops) / sizeof(uops[0]));
+}
+
+TEST(test_programspec_special_invalidate_local) {
+  UOp* ispec = uop_special_ex("idx2", 2, 6, dtypes.int32);
+  UOp* buf = uop_define_global(dtypes.float32, 0);
+  UOp* idx = uop_const(dtypes.int32, 0);
+  UOp* ptr = uop_index(buf, idx);
+  UOp* load = uop_load(ptr, dtypes.float32);
+  UOp* stores[] = {load};
+  UOp* sink = uop_sink(stores, 1);
+
+  UOp* uops[] = {ispec, buf, idx, ptr, load, sink};
+  ProgramSpec spec = {0};
+  spec.ast = sink;
+  spec.uops = uops;
+  spec.uops_count = (int)(sizeof(uops) / sizeof(uops[0]));
+  spec.has_local = true;
+  spec.global_size[0] = spec.global_size[1] = spec.global_size[2] = 1;
+  spec.local_size[0] = spec.local_size[1] = spec.local_size[2] = 1;
+  spec.global_size_valid = true;
+  spec.local_size_valid = true;
+  spec.estimates = renderer_estimates_from_uops(uops, spec.uops_count, 1);
+  programspec_finalize(&spec);
+
+  TEST_ASSERT_TRUE(spec.global_size_valid);
+  TEST_ASSERT_EQUAL_INT(6, spec.global_size[2]);
+  TEST_ASSERT_FALSE(spec.local_size_valid);
+  int ldim[3] = {-1,-1,-1};
+  ps_launch_dims(&spec, NULL, NULL, 0, NULL, ldim);
+  TEST_ASSERT_EQUAL_INT(0, ldim[0]);
+  TEST_ASSERT_EQUAL_INT(0, ldim[1]);
+  TEST_ASSERT_EQUAL_INT(0, ldim[2]);
+
+  if (spec.globals) free(spec.globals);
+  if (spec.ins) free(spec.ins);
+  if (spec.outs) free(spec.outs);
+  if (spec.vars) free(spec.vars);
+  cleanup_nodes(uops, sizeof(uops) / sizeof(uops[0]));
+}
+
+TEST(test_ps_function_name_helper) {
+  ProgramSpec spec = {0};
+  spec.name = strdup("kernel main");
+  char* fn = ps_function_name(&spec);
+  TEST_ASSERT_NOT_NULL(fn);
+  TEST_ASSERT_EQUAL_STRING("kernel20main", fn);
+  free(fn);
+  free(spec.name);
 }
 
 TEST_MAIN()

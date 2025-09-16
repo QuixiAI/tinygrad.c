@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 
 // Base file intentionally minimal: the concrete backends implement .render.
 // This source exists to ensure the symbol table is consistent and the
@@ -69,7 +70,18 @@ static long long const_from_uop(UOp* u) {
   if (u->op == OPS_CONST && u->arg.type == ARG_CONST) {
     double v = u->arg.const_data.const_value;
     if (v <= 0) return 0;
-    return (long long)v;
+    return (long long)llround(v);
+  }
+  UOp* simplified = uop_ssimplify(u);
+  if (simplified) {
+    long long val = 1;
+    if (simplified->op == OPS_CONST && simplified->arg.type == ARG_CONST) {
+      double v = simplified->arg.const_data.const_value;
+      if (v <= 0) val = 0;
+      else val = (long long)llround(v);
+    }
+    uop_unref(simplified);
+    return val;
   }
   return 1;
 }
@@ -131,6 +143,16 @@ static int dtype_value_nbytes(const DType* dt) {
   if (!dt) return 0;
   int count = dt->count > 0 ? dt->count : 1;
   return dt->itemsize * count;
+}
+
+static int parse_special_axis(const char* tag) {
+  if (!tag) return 0;
+  int axis = 0;
+  for (const char* c = tag; *c; c++) {
+    if (isdigit((unsigned char)*c)) axis = *c - '0';
+  }
+  if (axis < 0 || axis > 2) axis = 0;
+  return axis;
 }
 
 // -- Estimates.from_uops (simplified but parity-minded) --
@@ -216,7 +238,7 @@ Estimates renderer_estimates_from_uops(UOp** uops, int count, int ignore_indexin
             lds_groups[existing].maxbytes = nbytes;
           }
         } else {
-          e.lds += (long long)u->dtype.itemsize * mults;
+          e.lds += (long long)dtype_value_nbytes(&u->dtype) * mults;
         }
       }
       continue;
@@ -241,7 +263,7 @@ Estimates renderer_estimates_from_uops(UOp** uops, int count, int ignore_indexin
             lds_groups[existing].maxbytes = nbytes;
           }
         } else {
-          e.lds += (long long)u->src[1]->dtype.itemsize * mults;
+          e.lds += (long long)dtype_value_nbytes(&u->src[1]->dtype) * mults;
         }
       }
       continue;
@@ -331,6 +353,29 @@ void programspec_finalize(ProgramSpec* spec) {
         spec->ins[spec->ins_count++] = gid;
       }
     }
+
+    if (u->op == OPS_SPECIAL) {
+      const char* tag = (const char*)u->tag;
+      int axis = parse_special_axis(tag);
+      int bound = 0;
+      if (u->arg.type == ARG_TUPLE2 && u->arg.tuple2.second && u->arg.tuple2.count > 0) {
+        bound = u->arg.tuple2.second[0];
+      }
+      if (tag && tag[0] == 'i') {
+        spec->local_size_valid = false;
+        spec->local_size[0] = spec->local_size[1] = spec->local_size[2] = 0;
+      }
+      int* target = spec->global_size;
+      if (tag && tag[0] == 'l') {
+        if (spec->has_local && spec->local_size_valid) target = spec->local_size;
+        else target = NULL;
+      } else {
+        spec->global_size_valid = true;
+      }
+      if (target && axis >= 0 && axis < 3) {
+        target[axis] = bound;
+      }
+    }
   }
 
   if (spec->vars && spec->vars_count > 1) {
@@ -395,4 +440,30 @@ void programspec_finalize(ProgramSpec* spec) {
   }
 
   spec->estimates.mem = mem_est;
+}
+
+char* ps_function_name(const ProgramSpec* spec) {
+  if (!spec) return NULL;
+  if (spec->function_name) return strdup(spec->function_name);
+  if (!spec->name) return NULL;
+  return renderer_to_function_name(spec->name);
+}
+
+void ps_launch_dims(const ProgramSpec* spec, UOp** vars, const int* vals, int n,
+                    int out_global[3], int out_local[3]) {
+  (void)vars; (void)vals; (void)n;
+  if (out_global) {
+    if (spec && spec->global_size_valid) {
+      memcpy(out_global, spec->global_size, sizeof(int) * 3);
+    } else {
+      out_global[0] = out_global[1] = out_global[2] = 0;
+    }
+  }
+  if (out_local) {
+    if (spec && spec->local_size_valid) {
+      memcpy(out_local, spec->local_size, sizeof(int) * 3);
+    } else {
+      out_local[0] = out_local[1] = out_local[2] = 0;
+    }
+  }
 }

@@ -8,7 +8,7 @@ Objective
 
 Status Update
 
-- Base layer: `renderer_to_function_name`, `renderer_estimates_from_uops`, and the ProgramSpec helper live in `include/renderer/renderer.h` + `src/renderer/renderer.c`. They cover the common happy-paths (ALU, LOAD/STORE, deduped globals/ins/outs) but still miss several Python behaviors: SPECIAL nodes do not mutate `global_size/local_size`, launch-dim inference is stubbed out in `ProgramSpec`, and estimate accounting lacks WMMA- or SPECIAL-based scaling.
+- Base layer: `renderer_to_function_name`, `renderer_estimates_from_uops`, and the ProgramSpec helper live in `include/renderer/renderer.h` + `src/renderer/renderer.c`. They now propagate SPECIAL bounds into `global_size/local_size`, expose `ps_launch_dims`/`ps_function_name`, and count SPECIAL multipliers in estimates. WMMA flop accounting still uses the placeholder constant until tuple metadata lands.
 - C-style backend: `src/renderer/cstyle.c` renders scalar/vector ops, handles gating, RANGE/IF blocks, vector literals, and switches code paths for OpenCL/Metal/CUDA/HIP/AMD. The implementation is still hand-written (no PatternMatcher parity), bool/vector devectorization is limited, and backend constructors mostly share the same core without per-target prologues. Only the legacy `tests/renderer/test_cstyle.c` suite exercises it; there are no backend-specific snapshot tests yet.
 - LLVM IR backend: `src/renderer/llvmir.c` emits textual IR with loop PHIs, addrspace(3) locals, and a first pass at MFMA/WMMA lowering. A number of Python features remain unported (fine-grained fcmp flags, pattern-driven rewrites, richer attribute handling) and coverage is limited to `tests/renderer/test_llvmir.c`.
 - PTX backend: `src/renderer/ptx.c` supports basic kernel setup, ALU, and memory ops, but omits the tensor-core/WMMA paths, many matcher rewrites, and several pointer-casting corner cases present in Python.
@@ -38,7 +38,7 @@ Milestones & TODOs
   - [x] Add `renderer.h/.c` with:
     - [x] Renderer struct + vtable (`render` function pointer) and capability fields
     - [x] to_function_name (C port using helpers `tg_ansistrip`) → `renderer_to_function_name`
-    - [x] Estimates struct + `renderer_estimates_from_uops` (ALU/LOAD/STORE, MULACC=2, RANGE multipliers, dont_count when ignore_indexing). TODO: WMMA arg-based flops; SPECIAL multiplier.
+    - [x] Estimates struct + `renderer_estimates_from_uops` (ALU/LOAD/STORE, MULACC=2, RANGE multipliers, dont_count when ignore_indexing). TODO: WMMA arg-based flops.
     - [x] ProgramSpec fields derived from uops in `get_program`: vars (sorted by name), globals, outs/ins (dedup+sorted), function_name, base sizes, mem_estimate grouping (LOAD/STORE by (op, gid) max nbytes).
     - [x] Small string builder utility for kernel text (defer to M2 when emitting code).
   - [x] Unit tests for to_function_name, ProgramSpec extraction, Estimates on mini-uops (covered indirectly; add focused tests later).
@@ -54,28 +54,22 @@ Milestones & TODOs
   - [x] Backend-specific string differences (OpenCL/Metal/CUDA/HIP/AMD/QCOM): signatures, qualifiers, bitcasts, vector literal style, local/barrier, AMD OCML, OPS_SPECIAL
   - [x] Backend coverage tests (OpenCL/Metal/CUDA/HIP/AMD/QCOM signatures, qualifiers, bitcasts, locals, barriers, images validated via `tests/renderer/test_cstyle.c`)
 
-M3: Backends and LLVM IR (in progress)
-
-- [x] OpenCL images: image param typing and read/write forms with sampler.
-- [x] OPS_SPECIAL per backend (OpenCL get_*_id, CUDA/HIP blockIdx/threadIdx, Metal gid/lid).
-- [x] LLVM IR generic backend: signature + getelementptr, load/store, ALU (fadd/fsub/fmul/fdiv, add/sub/mul, shl/lshr/ashr, and/or/xor), comparisons (fcmp/icmp), casts (sitofp/fptosi/zext/sext/trunc/fpext/fptrunc), bitcast, IF/ENDIF and RANGE loops with PHI and latch.
-- [x] LLVM IR MFMA/WMMA: arch-based selection (gfx942/950 mfma; gfx12* wmma), typed operands/results, dtype suffixes f16/bf16/f32.
-- [x] LLVM IR AMD local memory: addrspace(3) globals for DEFINE_LOCAL + addrspacecast inside function.
-- [ ] LLVM IR improvements: fully mirror WMMA/MFMA combos, fcmp flags parity, addrspaces in more cases.
-- [x] PTX backend: kernel signature, ld.param, INDEX addr calc (mul.wide/add.s64), ld.global/st.global, basic ALU (add/mul/shl/shr/div), bitwise (and/or/xor), IF/ENDIF via setp + predicated bra, RANGE loops.
-- [x] WGSL backend: storage bindings, compute entry, WHERE via select, workgroupBarrier.
-- [x] WGSL backend: vector lowering for WHERE, special indices, more type coverage.
-- [x] WGSL backend: packed i8/i16 load/store via atomics; gated load/store; bitcasts for half/8/16; unsigned const typing; header prelude (f16, nan, INFINITY); bindings start at 1; workgroup_size from SPECIAL.
-- [x] Shared CStyle base: context for buffers, writes, preliminary names; integrated in WGSL and CStyle param collection.
-
-- [ ] M3: Full C-style backends
-  - [ ] Complete base_rewrite parity: VECTORIZE, PRECAST, SPECIAL, WMMA stubs, CUSTOM/CUSTOMI, GEP formatting, devectorize rules for bools
-  - [ ] Per-backend adapters:
-    - [ ] ClangRenderer: type_map, float4 typedef, sqrt builtin, AMX, entry/footer
-    - [ ] OpenCLRenderer: buffer/smem qualifiers, barrier, workitem code, image load/store patterns
-    - [ ] IntelRenderer, MetalRenderer: specific overrides (inherit from CStyleLanguage/OpenCL)
-    - [ ] CUDARenderer/AMDRenderer/NV/HIP/QCOM: device names, memory caps, string rewrites
-  - [ ] Tests: each backend snapshot vs Python for representative graphs
+- [ ] M3: Backends and LLVM IR (in progress)
+  - [x] OpenCL images: image param typing and read/write forms with sampler.
+  - [x] OPS_SPECIAL per backend (OpenCL get_*_id, CUDA/HIP blockIdx/threadIdx, Metal gid/lid).
+  - [x] LLVM IR generic backend: signature + getelementptr, load/store, ALU (fadd/fsub/fmul/fdiv, add/sub/mul, shl/lshr/ashr, and/or/xor), comparisons (fcmp/icmp), casts (sitofp/fptosi/zext/sext/trunc/fpext/fptrunc), bitcast, IF/ENDIF and RANGE loops with PHI and latch.
+  - [x] LLVM IR MFMA/WMMA: arch-based selection (gfx942/950 mfma; gfx12* wmma), typed operands/results, dtype suffixes f16/bf16/f32.
+  - [x] LLVM IR AMD local memory: addrspace(3) globals for DEFINE_LOCAL + addrspacecast inside function.
+  - [ ] LLVM IR improvements: fully mirror WMMA/MFMA combos, fcmp flags parity, addrspaces in more cases.
+  - [x] PTX backend: kernel signature, ld.param, INDEX addr calc (mul.wide/add.s64), ld.global/st.global, basic ALU (add/mul/shl/shr/div), bitwise (and/or/xor), IF/ENDIF via setp + predicated bra, RANGE loops.
+  - [x] WGSL backend: storage bindings, compute entry, WHERE via select, workgroupBarrier.
+  - [x] WGSL backend: vector lowering for WHERE, special indices, more type coverage.
+  - [x] WGSL backend: packed i8/i16 load/store via atomics; gated load/store; bitcasts for half/8/16; unsigned const typing; header prelude (f16, nan, INFINITY); bindings start at 1; workgroup_size from SPECIAL.
+  - [x] Shared CStyle base: context for buffers, writes, preliminary names; integrated in WGSL and CStyle param collection.
+  - [ ] C-style backend parity
+    - [ ] Complete base_rewrite coverage: VECTORIZE, PRECAST, SPECIAL, WMMA stubs, CUSTOM/CUSTOMI, GEP formatting, bool devectorization
+    - [ ] Per-backend adapters: Clang (type_map, float4 typedef, sqrt builtin, AMX hooks), OpenCL (addr qualifiers, barriers, workitem code, image IO), Metal/Intel overrides, CUDA/AMD/NV/HIP/QCOM signatures + caps
+    - [ ] Tests: snapshot coverage per backend vs Python
 
 - [ ] M4: PTXRenderer
   - [ ] `asm_for_op` map and dtype name table
@@ -157,6 +151,7 @@ Backend Construction
 Tests (incremental)
 
 - [x] Broaden ProgramSpec/Estimates coverage beyond the smoke test in `tests/renderer/test_renderer.c` (added SPECIAL multiplier, WMMA flops, and mem-estimate assertions).
+- [x] Added ProgramSpec launch-dimension tests covering SPECIAL global/local axes and helper accessors.
 - [ ] TODO: Switch the `test_renderer_estimates_wmma_flops` assertion over to the Python parity formula (`2 * prod(arg[1]) // arg[5]`) once the full WMMA tuple metadata is ported into C; the current constant `1024` guard will block that follow-up.
 - [ ] TODO: Extend ProgramSpec/Estimates tests to cover multi-range and mixed LOAD/STORE access patterns so we detect regressions when symbolic range propagation lands.
 - [ ] Renderer string snapshots for each backend (normalize whitespace before compare):
