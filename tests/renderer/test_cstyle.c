@@ -84,11 +84,30 @@ TEST(test_renderer_cuda_signature_contains_global) {
   free(src); uop_unref(x); free(r);
 }
 
+TEST(test_renderer_nv_sets_device_and_uses_cuda_path) {
+  Renderer* r = renderer_cstyle_nv("sm_75");
+  TEST_ASSERT_NOT_NULL(r);
+  TEST_ASSERT_EQUAL_STRING("NV", r->device);
+  UOp* x = uop_const(dtypes.int32, 0);
+  char* src = r->render(r, &x, 1);
+  TEST_ASSERT_NOT_NULL(strstr(src, "__global__ void kernel_main("));
+  free(src); uop_unref(x); free(r);
+}
+
 TEST(test_renderer_qcom_is_opencl_style) {
   Renderer* r = renderer_cstyle_qcom();
   UOp* x = uop_const(dtypes.int32, 0);
   char* src = r->render(r, &x, 1);
   TEST_ASSERT_NOT_NULL(strstr(src, "__kernel void kernel_main("));
+  free(src); uop_unref(x); free(r);
+}
+
+TEST(test_renderer_intel_adds_subgroup_attribute) {
+  Renderer* r = renderer_cstyle_intel();
+  TEST_ASSERT_NOT_NULL(r);
+  UOp* x = uop_const(dtypes.int32, 0);
+  char* src = r->render(r, &x, 1);
+  TEST_ASSERT_NOT_NULL(strstr(src, "__attribute__((intel_reqd_sub_group_size(8)))"));
   free(src); uop_unref(x); free(r);
 }
 

@@ -67,6 +67,7 @@ Milestones & TODOs
   - [x] WGSL backend: packed i8/i16 load/store via atomics; gated load/store; bitcasts for half/8/16; unsigned const typing; header prelude (f16, nan, INFINITY); bindings start at 1; workgroup_size from SPECIAL.
   - [x] Shared CStyle base: context for buffers, writes, preliminary names; integrated in WGSL and CStyle param collection.
   - [ ] C-style backend parity
+    - [x] Constructors for NV and Intel variants wired up (device/suffix adjustments, Intel subgroup attribute)
     - [ ] Complete base_rewrite coverage: VECTORIZE, PRECAST, SPECIAL, WMMA stubs, CUSTOM/CUSTOMI, GEP formatting, bool devectorization
     - [ ] Per-backend adapters: Clang (type_map, float4 typedef, sqrt builtin, AMX hooks), OpenCL (addr qualifiers, barriers, workitem code, image IO), Metal/Intel overrides, CUDA/AMD/NV/HIP/QCOM signatures + caps
     - [ ] Tests: snapshot coverage per backend vs Python

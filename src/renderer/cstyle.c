@@ -168,7 +168,13 @@ static char* clang_render(Renderer* self, UOp** uops, int uops_count) {
     cstyle_ctx_free(&wctx);
   }
   char fnhead[1024];
-  if (is_opencl(self)) strcpy(fnhead, "__kernel void kernel_main(");
+  if (is_opencl(self)) {
+    if (self->suffix && strcmp(self->suffix, "INTEL") == 0) {
+      strcpy(fnhead, "__attribute__((intel_reqd_sub_group_size(8)))\n__kernel void kernel_main(");
+    } else {
+      strcpy(fnhead, "__kernel void kernel_main(");
+    }
+  }
   else if (is_metal(self)) strcpy(fnhead, "kernel void kernel_main(");
   else if (is_cuda(self) || is_hip_or_amd(self)) strcpy(fnhead, "extern \"C\" __global__ void kernel_main(");
   else strcpy(fnhead, "void kernel_main(");
@@ -509,6 +515,12 @@ Renderer* renderer_cstyle_cuda(const char* arch) {
   return r;
 }
 
+Renderer* renderer_cstyle_nv(const char* arch) {
+  Renderer* r = renderer_cstyle_cuda(arch);
+  if (r) r->device = "NV";
+  return r;
+}
+
 Renderer* renderer_cstyle_amd(const char* arch) {
   (void)arch;
   Renderer* r = renderer_cstyle_clang();
@@ -543,5 +555,14 @@ Renderer* renderer_cstyle_qcom(void) {
   r->device = "QCOM";
   r->suffix = "OPENCL";
   r->has_local = true;
+  return r;
+}
+
+Renderer* renderer_cstyle_intel(void) {
+  Renderer* r = renderer_cstyle_opencl();
+  if (r) {
+    r->suffix = "INTEL";
+    r->device = "GPU";
+  }
   return r;
 }
