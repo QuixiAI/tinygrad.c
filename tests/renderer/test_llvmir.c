@@ -7,6 +7,33 @@
 void setUp(void) {}
 void tearDown(void) {}
 
+TEST(test_llvmir_amd_define_local_addrspace) {
+  Renderer* r = renderer_llvm_amd("gfx942");
+  UOp* loc = uop_define_local(dtypes.float32, 4);
+  UOp* arr[] = {loc};
+  char* src = r->render(r, arr, 1);
+  TEST_ASSERT_NOT_NULL(src);
+  TEST_ASSERT_NOT_NULL(strstr(src, "addrspace(3) global"));
+  TEST_ASSERT_NOT_NULL(strstr(src, "addrspacecast"));
+  free(src); uop_unref(loc); free(r);
+}
+
+TEST(test_llvmir_min_signature) {
+  Renderer* r = renderer_llvm_generic();
+  UOp* buf = uop_define_global(dtypes.float32, 0);
+  UOp* idx = uop_const(dtypes.int32, 4);
+  UOp* bidx = uop_index(buf, idx);
+  UOp* v = uop_load(bidx, dtypes.float32);
+  UOp* arr[] = {buf, idx, bidx, v};
+  char* src = r->render(r, arr, 4);
+  TEST_ASSERT_NOT_NULL(src);
+  TEST_ASSERT_NOT_NULL(strstr(src, "define void @kernel_main("));
+  // parameter list contains data0 pointer
+  TEST_ASSERT_NOT_NULL(strstr(src, "data0"));
+  TEST_ASSERT_NOT_NULL(strstr(src, "ret void"));
+  free(src); uop_unref(v); uop_unref(bidx); uop_unref(idx); uop_unref(buf); free(r);
+}
+
 TEST(test_llvmir_load_store_gep) {
   Renderer* r = renderer_llvm_generic();
   UOp* buf = uop_define_global(dtypes.float32, 0);
@@ -96,4 +123,23 @@ TEST(test_llvmir_div_shift_casts_ctrlflow) {
   free(r);
 }
 
+TEST(test_llvmir_wmma_mfma_suffixes) {
+  Renderer* r = renderer_llvm_amd("gfx942");
+  // Construct a minimal WMMA: a: <16 x half>, b: <16 x half>, acc: <8 x float>
+  DType a_dt = dtype_vec(&dtypes.float16, 16);
+  DType b_dt = dtype_vec(&dtypes.float16, 16);
+  DType c_dt = dtype_vec(&dtypes.float32, 8);
+  UOp* a = uop_vconst(a_dt, NULL, 0);
+  UOp* b = uop_vconst(b_dt, NULL, 0);
+  UOp* acc = uop_vconst(c_dt, NULL, 0);
+  int first[1] = {0}; int second[1] = {0};
+  UOp* w = uop_wmma(a, b, acc, first, second, 1);
+  UOp* arr[] = {a,b,acc,w};
+  char* src = r->render(r, arr, 4);
+  TEST_ASSERT_NOT_NULL(src);
+  TEST_ASSERT_NOT_NULL(strstr(src, "llvm.amdgcn.mfma.f32.16x16x16.f16"));
+  free(src); uop_unref(w); uop_unref(acc); uop_unref(b); uop_unref(a); free(r);
+}
+
 TEST_MAIN()
+

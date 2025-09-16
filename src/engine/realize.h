@@ -6,13 +6,14 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "renderer/renderer.h"
+
 // Forward declarations
 typedef struct UOp UOp;
 typedef struct Variable Variable;
 typedef struct Buffer Buffer;
 typedef struct Metadata Metadata;
 typedef struct Device Device;
-typedef struct Renderer Renderer;
 typedef struct ScheduleItem ScheduleItem;
 typedef struct Opt Opt;
 // Minimal KernelInfo used by renderer to name functions
@@ -30,32 +31,6 @@ typedef struct KernelInfo {
 KernelInfo* kernel_info_new(void);
 void kernel_info_free(KernelInfo* ki);
 typedef struct PatternMatcher PatternMatcher;
-
-// Port of: from tinygrad.renderer import Renderer, ProgramSpec, Estimates
-// NOTE: Estimates now defined in include/renderer/renderer.h
-
-typedef struct ProgramSpec {
-    char* name;
-    char* src;
-    char* device;
-    UOp* ast;
-    UOp** uops;
-    int uops_count;
-    int global_size[3];
-    int local_size[3];
-    bool has_local;
-    char* function_name;
-    Variable** vars;
-    int vars_count;
-    // additional fields per Python ProgramSpec
-    int* globals; int globals_count;
-    int* outs; int outs_count;
-    int* ins; int ins_count;
-    Estimates estimates;
-} ProgramSpec;
-
-// Helper exposed for testing/port parity: fills vars/globals/ins/outs/mem_estimate
-void programspec_finalize(ProgramSpec* spec);
 
 // **************** Program Creation ****************
 // Port of lines 13-48

@@ -10,6 +10,7 @@ extern "C" {
 
 // Forward decls
 typedef struct UOp UOp;
+typedef struct Variable Variable;
 typedef struct PatternMatcher PatternMatcher;
 
 // Base Renderer interface (parity with Python Renderer fields where applicable)
@@ -51,6 +52,33 @@ typedef struct Estimates {
 // Compute estimates from a uops list. If ignore_indexing!=0, attempts to
 // ignore indexing-cost expressions (best-effort parity with Python).
 Estimates renderer_estimates_from_uops(UOp** uops, int count, int ignore_indexing);
+
+// -------- ProgramSpec helpers (parity with Python ProgramSpec) --------
+
+typedef struct ProgramSpec {
+  char* name;
+  char* src;
+  char* device;
+  UOp* ast;
+  UOp** uops;
+  int uops_count;
+  int global_size[3];
+  int local_size[3];
+  bool has_local;
+  char* function_name;
+  Variable** vars;
+  int vars_count;
+  int* globals;
+  int globals_count;
+  int* outs;
+  int outs_count;
+  int* ins;
+  int ins_count;
+  Estimates estimates;
+} ProgramSpec;
+
+// Populate ProgramSpec derived fields (vars/globals/ins/outs/mem).
+void programspec_finalize(ProgramSpec* spec);
 
 #ifdef __cplusplus
 }
