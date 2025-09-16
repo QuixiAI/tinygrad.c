@@ -514,6 +514,19 @@ UOp* uop_define_reg(DType dtype) {
     return u;
 }
 
+UOp* uop_special_ex(const char* tag, int axis, int bound, DType dtype) {
+    // Create a SPECIAL with ARG_TUPLE2 first[0]=axis, second[0]=bound and tag string
+    UOpArg arg = {.type = ARG_TUPLE2};
+    arg.tuple2.count = 1;
+    int f[1] = { axis };
+    int s[1] = { bound };
+    arg.tuple2.first = f;
+    arg.tuple2.second = s;
+    // uop_new deep-copies tuple2 arrays; pass tag string through tag pointer
+    UOp* u = uop_new(OPS_SPECIAL, dtype, NULL, 0, &arg, (void*)strdup(tag ? tag : ""));
+    return u;
+}
+
 // Line 147-190: Binary operations
 UOp* uop_add(UOp* a, UOp* b) {
     UOp* src[] = {a, b};

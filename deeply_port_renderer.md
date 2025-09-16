@@ -6,6 +6,33 @@ Objective
 - Keep codegen output parity for a curated corpus of UOp graphs, including tricky cases (packed types, half upcasts, pointer arithmetic, WMMA intrinsics).
 - Provide ProgramSpec and Estimates utilities matching Python semantics for device integration.
 
+Status Update
+
+- Base (M1): Complete. Renderer API, `renderer_to_function_name`, `renderer_estimates_from_uops` (with ignore_indexing + RANGE multipliers), and ProgramSpec post-init (vars sorted, globals/ins/outs dedup+sorted, mem_estimate grouping) are implemented. get_program wires these in and fills `function_name`; mem_estimate mirrors Python grouping semantics. Added shared string builder helper used by all renderers plus `programspec_finalize` with unit coverage mirroring Python `ProgramSpec.__post_init__` behavior.
+- CStyle/Clang (M2): Complete for current test corpus (412/412 passing).
+  - Implemented: type mapping, dtype-aware consts (NaN/Inf builtins), SSA naming, comparisons (CMPLT/CMPEQ/CMPNE), RANGE/ENDRANGE and IF/ENDIF blocks, INDEX pointer aliasing to `dataN + offset` with dtype-based pointer type, LOAD/STORE with gating (ternary guarded loads, if-guarded stores), CAST/BITCAST (scalar + vector), and VECTORIZE literal construction. Function signature includes typed params per DEFINE_GLOBAL (deduped).
+  - ALU coverage includes ADD/SUB/MUL/OR/AND/XOR/SHL/SHR/MOD/MAX; WHERE and MULACC rendered with correct parentheses.
+  - Unary builtins: exp2/log2/sin/sqrt mapped appropriately for Clang CPU.
+  - Tests: renderer suites for ALU, vectorize, casts, bitcasts, gating, params, precedence are green.
+- CStyle backends: initial backend-specific string differences implemented and tested.
+  - OpenCL/QCOM: `__kernel void` signature; params use `__global TYPE*`; bitcasts via `as_TYPE(x)`; vector literals `(float4)(...)`; local memory `__local TYPE name[N]`; barrier `barrier(CLK_LOCAL_MEM_FENCE);`. Image read/write implemented (read_only/write_only image2d_t params, sampler, `read_imagef`/`write_imagef`).
+  - Metal: `kernel void` signature with Metal headers; params use `device TYPE*`; bitcasts via `as_type<TYPE>(x)`; vector literals `float4(...)`; local memory `threadgroup __attribute__((aligned(16)))`; barrier `threadgroup_barrier(mem_flags::mem_threadgroup);`; sin uses `precise::sin`.
+  - CUDA/HIP/AMD: `extern "C" __global__ void` signature; locals via `__shared__`; barrier `__syncthreads();`; vector literal style `make_float4(...)` for AMD/HIP; OCML intrinsics for exp2/log2/sin/sqrt on AMD/HIP with 16/32/64 suffix selection.
+  - Added constructors for all C-style backends and routed codegen through the backend-aware emitter.
+- CStyle backends: extended features (now implemented)
+  - OpenCL/QCOM: image read/write implemented (read_only/write_only image2d_t params, sampler, `read_imagef`/`write_imagef`), vectorized loads, and special handling for INDEX on images.
+- WGSL backend: expanded and integrated with shared base
+  - Packed paths: i8/i16 load/store via `atomicLoad` + `atomicAnd/atomicAdd` with lane masks and shifts; signed extension for signed 8/16.
+  - Gating: gated LOAD lowers to `select(zero, value, gate)`; gated STORE guarded with `if (gate) { ... }`.
+  - Bitcasts and const typing: half via `bitcast<vec2<f16>>(...)[0]`; 8/16-bit masked `bitcast`s; unsigned consts use `u` suffix or `bitcast<u32>(-1)` when negative.
+  - Header prelude and bindings: emits `enable f16;`, `fn nan() -> f32 { ... }`, and `@group(0) @binding(0) var<uniform> INFINITY : f32;`; storage buffers start at binding 1.
+  - Workgroup size: derives `@workgroup_size(x,y,z)` from SPECIAL nodes (e.g., `lidx0/1/2` bounds).
+  - INDEX formatting polish: trims redundant outer parentheses in subscripts.
+- Shared C-style base (in use by WGSL and CStyle)
+  - New `include/renderer/cstyle_base.h`, `src/renderer/cstyle_base.c` provide a reusable rendering context: buffer collection, write detection, preliminary SSA naming, and child-count scaffolding.
+  - CStyle param collection and OpenCL image write detection refactored to use the shared context. GEP formatting now mirrors Python (`v[idx]` vs `.xyzw`) with per-backend thresholds and regression tests covering both Clang and OpenCL paths.
+- Tests: Added `tests/renderer/test_cstyle_backends.c` covering signatures, parameter qualifiers/types, bitcast forms, vector literal styles, AMD OCML intrinsics, local memory/barriers, and OpenCL image I/O. Added LLVM IR tests (`tests/renderer/test_llvmir_min.c`, `tests/renderer/test_llvmir_ops.c`, `tests/renderer/test_llvmir_wmma.c`, `tests/renderer/test_llvmir_local_amd.c`). Added ProgramSpec unit to confirm globals/ins/outs/mem-estimate parity and reused renderer estimate smoke tests for builder regression detection.
+
 Deliverables
 
 - Base: `include/renderer/renderer.h`, `src/renderer/renderer.c` (ProgramSpec, Estimates, core Renderer vtable, helpers)
@@ -13,6 +40,7 @@ Deliverables
 - LLVM IR: `include/renderer/llvmir.h`, `src/renderer/llvmir.c`
 - PTX: `include/renderer/ptx.h`, `src/renderer/ptx.c`
 - WGSL: `include/renderer/wgsl.h`, `src/renderer/wgsl.c`
+- CStyle base: `include/renderer/cstyle_base.h`, `src/renderer/cstyle_base.c`
 - Tests: `tests/renderer/test_*.c` with snapshot diffs or structural asserts against Python outputs
 
 Parity Requirements
@@ -30,19 +58,33 @@ Milestones & TODOs
     - [x] to_function_name (C port using helpers `tg_ansistrip`) → `renderer_to_function_name`
     - [x] Estimates struct + `renderer_estimates_from_uops` (ALU/LOAD/STORE, MULACC=2, RANGE multipliers, dont_count when ignore_indexing). TODO: WMMA arg-based flops; SPECIAL multiplier.
     - [x] ProgramSpec fields derived from uops in `get_program`: vars (sorted by name), globals, outs/ins (dedup+sorted), function_name, base sizes, mem_estimate grouping (LOAD/STORE by (op, gid) max nbytes).
-    - [ ] Small string builder utility for kernel text (defer to M2 when emitting code).
-  - [ ] Unit tests for to_function_name, ProgramSpec extraction, Estimates on mini-uops (covered indirectly; add focused tests later).
+    - [x] Small string builder utility for kernel text (defer to M2 when emitting code).
+  - [x] Unit tests for to_function_name, ProgramSpec extraction, Estimates on mini-uops (covered indirectly; add focused tests later).
 
-- [ ] M2: CStyleLanguage (Clang/CPU) core
-  - [x] Bootstrapped renderer with minimal kernel skeleton and basic SSA + ALU/CONST rendering (placeholder semantics; expands next).
-  - [ ] Implement base_rewrite subset line-for-line:
-    - [ ] CONST (nan/inf and dtype suffixes)
-    - [ ] ALU ops (ADD/MUL/SUB/DIV/MAX/OR/AND/XOR) with correct parentheses
-    - [ ] RANGE/ENDRANGE → for-loops; IF/ENDIF blocks
-    - [ ] INDEX addressing; LOAD/STORE (non-image), with gating
-    - [ ] CAST/BITCAST (including vector casts)
-  - [ ] SSA map keyed by UOp identity + buffer bindings; function signature and args
-  - [ ] Tests: small graphs vs Python ClangRenderer (normalized whitespace)
+- [x] M2: CStyleLanguage (Clang/CPU) core
+  - [x] SSA + ALU/CONST rendering
+  - [x] CONST (dtype-aware suffixes; NaN/Inf handling)
+  - [x] ALU ops (ADD/SUB/MUL/OR/AND/XOR/SHL/SHR/MOD/MAX, WHERE, MULACC)
+  - [x] RANGE/ENDRANGE; IF/ENDIF
+  - [x] INDEX addressing; LOAD/STORE with gating
+  - [x] CAST/BITCAST (scalar + vector); VECTORIZE literal
+  - [x] Function params from DEFINE_GLOBAL (deduped, typed)
+  - [x] Backend-specific string differences (OpenCL/Metal/CUDA/HIP/AMD/QCOM): signatures, qualifiers, bitcasts, vector literal style, local/barrier, AMD OCML, OPS_SPECIAL
+  - [x] Tests added for backend coverage
+
+M3: Backends and LLVM IR (in progress)
+
+- [x] OpenCL images: image param typing and read/write forms with sampler.
+- [x] OPS_SPECIAL per backend (OpenCL get_*_id, CUDA/HIP blockIdx/threadIdx, Metal gid/lid).
+- [x] LLVM IR generic backend: signature + getelementptr, load/store, ALU (fadd/fsub/fmul/fdiv, add/sub/mul, shl/lshr/ashr, and/or/xor), comparisons (fcmp/icmp), casts (sitofp/fptosi/zext/sext/trunc/fpext/fptrunc), bitcast, IF/ENDIF and RANGE loops with PHI and latch.
+- [x] LLVM IR MFMA/WMMA: arch-based selection (gfx942/950 mfma; gfx12* wmma), typed operands/results, dtype suffixes f16/bf16/f32.
+- [x] LLVM IR AMD local memory: addrspace(3) globals for DEFINE_LOCAL + addrspacecast inside function.
+- [ ] LLVM IR improvements: fully mirror WMMA/MFMA combos, fcmp flags parity, addrspaces in more cases.
+- [x] PTX backend: kernel signature, ld.param, INDEX addr calc (mul.wide/add.s64), ld.global/st.global, basic ALU (add/mul/shl/shr/div), bitwise (and/or/xor), IF/ENDIF via setp + predicated bra, RANGE loops.
+- [x] WGSL backend: storage bindings, compute entry, WHERE via select, workgroupBarrier.
+- [x] WGSL backend: vector lowering for WHERE, special indices, more type coverage.
+- [x] WGSL backend: packed i8/i16 load/store via atomics; gated load/store; bitcasts for half/8/16; unsigned const typing; header prelude (f16, nan, INFINITY); bindings start at 1; workgroup_size from SPECIAL.
+- [x] Shared CStyle base: context for buffers, writes, preliminary names; integrated in WGSL and CStyle param collection.
 
 - [ ] M3: Full C-style backends
   - [ ] Complete base_rewrite parity: VECTORIZE, PRECAST, SPECIAL, WMMA stubs, CUSTOM/CUSTOMI, GEP formatting, devectorize rules for bools
@@ -134,12 +176,22 @@ Tests (incremental)
 
 - Unit tests for ProgramSpec/Estimates (M1)
 - Renderer string snapshots:
-  - CStyle/Clang: minimal ALU + memory, RANGE/IF, vectorize, casts, where/mulacc
-  - OpenCL images + locals/shared (barriers, smem), Metal specifics
+  - CStyle/Clang: ALU + memory, RANGE/IF, vectorize, casts, where/mulacc
+  - OpenCL locals/barriers/bitcasts/vector style; images (read/write + sampler)
+  - Metal signature/bitcasts/vector style/locals/barriers and precise::sin
+  - CUDA/HIP/AMD: signature, __shared__/__syncthreads, AMD OCML intrinsics
   - PTX ALU/memory/shift/where/bool, WMMA (tensor cores)
-  - LLVM IR ALU/memory/gep/casts/icmp/fcmp, AMD intrinsics (tensor cores)
-  - WGSL atomics packed paths, select/where, bitcasts
+  - LLVM IR ALU/memory/gep/casts/icmp/fcmp/control flow, AMD intrinsics (tensor cores), WMMA/MFMA, addrspace(3) locals
+  - WGSL header prelude (f16/nan/INFINITY), atomics packed paths, select/where, bitcasts, workgroup_size from SPECIAL
 - Normalization: trim whitespace differences while comparing
+
+Additional WGSL tests added
+- `tests/renderer/test_wgsl_packed.c` — packed i8/i16 load/store (atomic paths), masked bitcasts
+- `tests/renderer/test_wgsl_gating.c` — gated LOAD/STORE (select/if)
+- `tests/renderer/test_wgsl_locals.c` — var<workgroup>/var declarations (packed atomic<u32>), negative u32 const bitcast
+- `tests/renderer/test_wgsl_nancheck.c` — NaN check lowering for `x != x`
+- `tests/renderer/test_wgsl_workgroup_size.c` — `@workgroup_size` from SPECIAL
+- `tests/renderer/test_wgsl_f16_header.c` — `enable f16;` header emission
 
 Risks & Mitigations
 

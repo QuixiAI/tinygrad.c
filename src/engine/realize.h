@@ -15,7 +15,20 @@ typedef struct Device Device;
 typedef struct Renderer Renderer;
 typedef struct ScheduleItem ScheduleItem;
 typedef struct Opt Opt;
-typedef struct KernelInfo KernelInfo;
+// Minimal KernelInfo used by renderer to name functions
+typedef struct KernelInfo {
+    // Display name (unsanitized). Used to derive function_name
+    char* name;
+    // Cached/sanitized function symbol (renderer_to_function_name(name))
+    char* function_name;
+    // Optional: placeholder for opts_to_apply parity (not used yet)
+    void* opts_to_apply;
+    int opts_count;
+} KernelInfo;
+
+// Helpers to create/destroy KernelInfo
+KernelInfo* kernel_info_new(void);
+void kernel_info_free(KernelInfo* ki);
 typedef struct PatternMatcher PatternMatcher;
 
 // Port of: from tinygrad.renderer import Renderer, ProgramSpec, Estimates
@@ -40,6 +53,9 @@ typedef struct ProgramSpec {
     int* ins; int ins_count;
     Estimates estimates;
 } ProgramSpec;
+
+// Helper exposed for testing/port parity: fills vars/globals/ins/outs/mem_estimate
+void programspec_finalize(ProgramSpec* spec);
 
 // **************** Program Creation ****************
 // Port of lines 13-48

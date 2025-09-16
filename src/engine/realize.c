@@ -42,6 +42,23 @@ int TRACEMETA = 0;
 // **************** Program Creation ****************
 // Port of lines 13-48
 
+// Minimal KernelInfo impl
+KernelInfo* kernel_info_new(void) {
+    KernelInfo* ki = calloc(1, sizeof(KernelInfo));
+    ki->name = NULL;
+    ki->function_name = NULL;
+    ki->opts_to_apply = NULL;
+    ki->opts_count = 0;
+    return ki;
+}
+
+void kernel_info_free(KernelInfo* ki) {
+    if (!ki) return;
+    if (ki->name) free(ki->name);
+    if (ki->function_name) free(ki->function_name);
+    free(ki);
+}
+
 // Port of: @track_rewrites(name=lambda *args,ret,**kwargs: TracingKey(ret.name, (ret.function_name, ret.ast), ret=ret))
 // Port of: def get_program(ast:UOp, renderer:Renderer|None=None, opts:list[Opt]|None=None) -> ProgramSpec:
 ProgramSpec* get_program(UOp* ast, Renderer* renderer, Opt** opts, int opts_count) {
@@ -66,7 +83,8 @@ ProgramSpec* get_program(UOp* ast, Renderer* renderer, Opt** opts, int opts_coun
         KernelInfo* ki = kernel_info_new();
         ki->opts_to_apply = opts;
         ki->opts_count = opts_count;
-        ast = uop_replace(ast, NULL, 0, ki);
+        // Attach kernel info via tag so renderer can read it
+        ast->tag = ki;
     }
     
     // Port of line 35-40: try/except for full_rewrite
@@ -99,7 +117,9 @@ ProgramSpec* get_program(UOp* ast, Renderer* renderer, Opt** opts, int opts_coun
     
     // Port of line 47-48: return ProgramSpec(...)
     ProgramSpec* spec = calloc(1, sizeof(ProgramSpec));
-    spec->name = uops[uops_count - 1]->arg != NULL ? strdup(((KernelInfo*)uops[uops_count - 1]->arg)->name) : strdup("test");
+    // Prefer name from KernelInfo stored in tag on SINK if present
+    KernelInfo* ki = (KernelInfo*)uops[uops_count - 1]->tag;
+    spec->name = (ki && ki->name) ? strdup(ki->name) : strdup("test");
     spec->src = src;
     spec->device = strdup(renderer->device);
     spec->ast = ast;
@@ -112,55 +132,101 @@ ProgramSpec* get_program(UOp* ast, Renderer* renderer, Opt** opts, int opts_coun
     }
     // function_name from name (to_function_name parity)
     spec->function_name = renderer_to_function_name(spec->name);
+    // Cache into KernelInfo for renderer parity if present
+    if (ki) {
+        if (ki->function_name) { free(ki->function_name); }
+        ki->function_name = strdup(spec->function_name);
+    }
     // rough estimates (ignore_indexing=True as in Python ProgramSpec.estimates)
     spec->estimates = renderer_estimates_from_uops(uops, uops_count, /*ignore_indexing*/1);
 
+    programspec_finalize(spec);
+    
+    return spec;
+}
+
+void programspec_finalize(ProgramSpec* spec) {
+    if (!spec || !spec->uops || spec->uops_count <= 0) return;
+    UOp** uops = spec->uops;
+    int uops_count = spec->uops_count;
     // Derive ProgramSpec fields from uops (Python __post_init__ parity)
     // globals/ins/outs and vars collection + special sizes
     // NOTE: Python initializes sizes outside and SPECIAL overrides. we mimic that.
     // Collect vars and global buffer ids
-    int vars_cap=8; spec->vars_count=0; spec->vars = (Variable**)malloc(sizeof(Variable*)*vars_cap);
-    int g_cap=8; spec->globals_count=0; spec->globals = (int*)malloc(sizeof(int)*g_cap);
-    int ins_cap=16; spec->ins_count=0; spec->ins = (int*)malloc(sizeof(int)*ins_cap);
-    int outs_cap=16; spec->outs_count=0; spec->outs = (int*)malloc(sizeof(int)*outs_cap);
-    for (int i=0;i<uops_count;i++) {
+    int vars_cap = spec->vars ? spec->vars_count : 8;
+    if (!spec->vars) spec->vars = (Variable**)malloc(sizeof(Variable*) * vars_cap);
+    spec->vars_count = 0;
+    int g_cap = spec->globals ? spec->globals_count : 8;
+    if (!spec->globals) spec->globals = (int*)malloc(sizeof(int) * g_cap);
+    spec->globals_count = 0;
+    int ins_cap = spec->ins ? spec->ins_count : 16;
+    if (!spec->ins) spec->ins = (int*)malloc(sizeof(int) * ins_cap);
+    spec->ins_count = 0;
+    int outs_cap = spec->outs ? spec->outs_count : 16;
+    if (!spec->outs) spec->outs = (int*)malloc(sizeof(int) * outs_cap);
+    spec->outs_count = 0;
+    for (int i = 0; i < uops_count; i++) {
         UOp* u = uops[i]; if (!u) continue;
         if (u->op == OPS_DEFINE_VAR) {
-            if (spec->vars_count>=vars_cap){ vars_cap*=2; spec->vars=(Variable**)realloc(spec->vars, sizeof(Variable*)*vars_cap);} 
+            if (spec->vars_count >= vars_cap) { vars_cap *= 2; spec->vars = (Variable**)realloc(spec->vars, sizeof(Variable*) * vars_cap); }
             spec->vars[spec->vars_count++] = (Variable*)u;
         }
         if (u->op == OPS_DEFINE_GLOBAL) {
-            int id = (u->arg.type==ARG_INT)? u->arg.int_data.i : 0;
-            if (spec->globals_count>=g_cap){ g_cap*=2; spec->globals=(int*)realloc(spec->globals, sizeof(int)*g_cap);} 
+            int id = (u->arg.type == ARG_INT) ? u->arg.int_data.i : 0;
+            if (spec->globals_count >= g_cap) { g_cap *= 2; spec->globals = (int*)realloc(spec->globals, sizeof(int) * g_cap); }
             spec->globals[spec->globals_count++] = id;
         }
         if (u->op == OPS_STORE) {
-            // walk dst buffer index topo to find DEFINE_GLOBAL IDs
-            if (u->src_count>=1) {
-                size_t n=0; UOp** topo = uop_toposort(u->src[0], &n);
-                if (topo){ for (size_t k=0;k<n;k++){ if (topo[k]->op==OPS_DEFINE_GLOBAL){ int id=(topo[k]->arg.type==ARG_INT)? topo[k]->arg.int_data.i : 0; if (spec->outs_count>=outs_cap){ outs_cap*=2; spec->outs=(int*)realloc(spec->outs, sizeof(int)*outs_cap);} spec->outs[spec->outs_count++]=id; } } free(topo);}            
+            if (u->src_count >= 1) {
+                size_t n = 0; UOp** topo = uop_toposort(u->src[0], &n);
+                if (topo) {
+                    for (size_t k = 0; k < n; k++) {
+                        if (topo[k]->op == OPS_DEFINE_GLOBAL) {
+                            int id = (topo[k]->arg.type == ARG_INT) ? topo[k]->arg.int_data.i : 0;
+                            if (spec->outs_count >= outs_cap) { outs_cap *= 2; spec->outs = (int*)realloc(spec->outs, sizeof(int) * outs_cap); }
+                            spec->outs[spec->outs_count++] = id;
+                        }
+                    }
+                    free(topo);
+                }
             }
         }
         if (u->op == OPS_LOAD) {
-            if (u->src_count>=1) {
-                size_t n=0; UOp** topo = uop_toposort(u->src[0], &n);
-                if (topo){ for (size_t k=0;k<n;k++){ if (topo[k]->op==OPS_DEFINE_GLOBAL){ int id=(topo[k]->arg.type==ARG_INT)? topo[k]->arg.int_data.i : 0; if (spec->ins_count>=ins_cap){ ins_cap*=2; spec->ins=(int*)realloc(spec->ins, sizeof(int)*ins_cap);} spec->ins[spec->ins_count++]=id; } } free(topo);}            
+            if (u->src_count >= 1) {
+                size_t n = 0; UOp** topo = uop_toposort(u->src[0], &n);
+                if (topo) {
+                    for (size_t k = 0; k < n; k++) {
+                        if (topo[k]->op == OPS_DEFINE_GLOBAL) {
+                            int id = (topo[k]->arg.type == ARG_INT) ? topo[k]->arg.int_data.i : 0;
+                            if (spec->ins_count >= ins_cap) { ins_cap *= 2; spec->ins = (int*)realloc(spec->ins, sizeof(int) * ins_cap); }
+                            spec->ins[spec->ins_count++] = id;
+                        }
+                    }
+                    free(topo);
+                }
             }
         }
         // SPECIAL handled later when renderer sets sizes; no-op here
     }
-    // Dedup and sort ins/outs
-    // simple O(n^2) dedup then sort ascending
+    // Dedup and sort ins/outs/globals
     #define DEDUP_AND_SORT(arr, cnt) \
       do { \
-        for (int a=0;a<(cnt);a++){ for (int b=a+1;b<(cnt);){ if ((arr)[a]==(arr)[b]){ memmove((arr)+b,(arr)+b+1,sizeof(int)*((cnt)-b-1)); (cnt)--; } else b++; } } \
-        /* simple insertion sort */ for (int a=1;a<(cnt);a++){ int v=(arr)[a], j=a-1; while (j>=0 && (arr)[j]>v){ (arr)[j+1]=(arr)[j]; j--; } (arr)[j+1]=v; } \
-      } while(0)
+        for (int a = 0; a < (cnt); a++) { \
+          for (int b = a + 1; b < (cnt);) { \
+            if ((arr)[a] == (arr)[b]) { memmove((arr) + b, (arr) + b + 1, sizeof(int) * ((cnt) - b - 1)); (cnt)--; } \
+            else { b++; } \
+          } \
+        } \
+        for (int a = 1; a < (cnt); a++) { \
+          int v = (arr)[a]; int j = a - 1; \
+          while (j >= 0 && (arr)[j] > v) { (arr)[j + 1] = (arr)[j]; j--; } \
+          (arr)[j + 1] = v; \
+        } \
+      } while (0)
     DEDUP_AND_SORT(spec->ins, spec->ins_count);
     DEDUP_AND_SORT(spec->outs, spec->outs_count);
     DEDUP_AND_SORT(spec->globals, spec->globals_count);
     #undef DEDUP_AND_SORT
-    // Sort vars by variable name (Python: key=lambda v: v.arg)
     if (spec->vars && spec->vars_count > 1) {
       int cmp_var(const void* a, const void* b){
         const UOp* ua = (const UOp*)(*(const Variable* const*)a);
@@ -173,37 +239,51 @@ ProgramSpec* get_program(UOp* ast, Renderer* renderer, Opt** opts, int opts_coun
     }
 
     // mem_estimate (Python ProgramSpec.mem_estimate)
-    {
-      long long mem_est = 0;
-      size_t tn=0; UOp** topo = uop_toposort(spec->ast, &tn);
-      if (topo) {
-        typedef struct { int op; int gid; int maxbytes; } Group;
-        Group* groups=NULL; int gc=0, gcap=8; groups=(Group*)malloc(sizeof(Group)*gcap);
-        for (size_t i=0;i<tn;i++) {
-          UOp* x = topo[i]; if (!x) continue;
-          if (x->op==OPS_LOAD || x->op==OPS_STORE) {
-            // find DEFINE_GLOBAL id in base of buffer
-            int gid=-1; if (x->src_count>=1) {
-              size_t bn=0; UOp** btop = uop_toposort(x->src[0], &bn);
-              if (btop){ for (size_t k=0;k<bn;k++){ if (btop[k]->op==OPS_DEFINE_GLOBAL){ gid=(btop[k]->arg.type==ARG_INT)? btop[k]->arg.int_data.i : 0; break; } } free(btop);}            
+    long long mem_est = 0;
+    size_t tn = 0; UOp** topo = uop_toposort(spec->ast, &tn);
+    if (topo) {
+      typedef struct { int op; int gid; int maxbytes; } Group;
+      Group* groups = NULL; int gc = 0, gcap = 8;
+      groups = (Group*)malloc(sizeof(Group) * gcap);
+      for (size_t i = 0; i < tn; i++) {
+        UOp* x = topo[i]; if (!x) continue;
+        if (x->op == OPS_LOAD || x->op == OPS_STORE) {
+          int gid = -1;
+          if (x->src_count >= 1) {
+            size_t bn = 0; UOp** btop = uop_toposort(x->src[0], &bn);
+            if (btop) {
+              for (size_t k = 0; k < bn; k++) {
+                if (btop[k]->op == OPS_DEFINE_GLOBAL) {
+                  gid = (btop[k]->arg.type == ARG_INT) ? btop[k]->arg.int_data.i : 0;
+                  break;
+                }
+              }
+              free(btop);
             }
-            if (gid<0) continue;
-            // compute nbytes for pointer dtype
-            int nbytes = 0; if (x->src_count>=1) { const PtrDType* pd=(const PtrDType*)&x->src[0]->dtype; nbytes = ptrdtype_nbytes(pd); }
-            // find group
-            int gi=-1; for (int j=0;j<gc;j++){ if (groups[j].op==x->op && groups[j].gid==gid){ gi=j; break; } }
-            if (gi<0){ if (gc>=gcap){ gcap*=2; groups=(Group*)realloc(groups,sizeof(Group)*gcap);} groups[gc++] = (Group){ .op=x->op, .gid=gid, .maxbytes=nbytes }; }
-            else { if (nbytes > groups[gi].maxbytes) groups[gi].maxbytes = nbytes; }
+          }
+          if (gid < 0) continue;
+          int nbytes = 0;
+          if (x->src_count >= 1) {
+            const PtrDType* pd = (const PtrDType*)&x->src[0]->dtype;
+            nbytes = ptrdtype_nbytes(pd);
+          }
+          int gi = -1;
+          for (int j = 0; j < gc; j++) {
+            if (groups[j].op == x->op && groups[j].gid == gid) { gi = j; break; }
+          }
+          if (gi < 0) {
+            if (gc >= gcap) { gcap *= 2; groups = (Group*)realloc(groups, sizeof(Group) * gcap); }
+            groups[gc++] = (Group){ .op = x->op, .gid = gid, .maxbytes = nbytes };
+          } else {
+            if (nbytes > groups[gi].maxbytes) groups[gi].maxbytes = nbytes;
           }
         }
-        for (int j=0;j<gc;j++) mem_est += groups[j].maxbytes;
-        free(groups);
-        free(topo);
       }
-      spec->estimates.mem = mem_est;
+      for (int j = 0; j < gc; j++) mem_est += groups[j].maxbytes;
+      free(groups);
+      free(topo);
     }
-    
-    return spec;
+    spec->estimates.mem = mem_est;
 }
 
 // **************** Runners ****************

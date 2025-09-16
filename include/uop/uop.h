@@ -408,6 +408,9 @@ UOp* uop_const_ex(DType dtype, double value, UOp* device_uop, const int32_t* sha
 UOp* uop_define_global(DType dtype, int idx);
 UOp* uop_define_local(DType dtype, size_t size);
 UOp* uop_define_reg(DType dtype);
+// Create a SPECIAL op with tag (e.g., "lidx0", "gidx1") and axis/bound metadata.
+// axis is typically parsed from the tag's trailing digit (0,1,2). bound is the max size for that axis.
+UOp* uop_special_ex(const char* tag, int axis, int bound, DType dtype);
 UOp* uop_add(UOp* a, UOp* b);
 UOp* uop_mul(UOp* a, UOp* b);
 UOp* uop_sub(UOp* a, UOp* b);
