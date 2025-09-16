@@ -9,8 +9,6 @@ static const char* nm_get(name_map_t* m, UOp* u){ for(int i=0;i<m->count;i++) if
 static const char* nm_add(name_map_t* m, UOp* u, const char* prefix, int* counter){ char tmp[32]; snprintf(tmp,sizeof(tmp),"%s%d", prefix, (*counter)++); if (m->count+1>m->cap){ int nc=m->cap?m->cap*2:32; m->keys=(UOp**)realloc(m->keys,nc*sizeof(UOp*)); m->names=(char**)realloc(m->names,nc*sizeof(char*)); m->cap=nc; } m->keys[m->count]=u; m->names[m->count]=strdup(tmp); m->count++; return m->names[m->count-1]; }
 static int dtype_itemsize(const DType* dt){ const DType* s=dt; if (dt->count>1 && dt->_scalar) s=dt->_scalar; return s->itemsize; }
 static int is_float(const DType* dt){ const DType* s=dt; if (dt->count>1 && dt->_scalar) s=dt->_scalar; return dtype_eq(s, &dtypes.float32) || dtype_eq(s, &dtypes.float64) || dtype_eq(s, &dtypes.float16) || dtype_eq(s, &dtypes.bfloat16); }
-static const char* ptx_ty_suffix(const DType* dt){ return is_float(dt)?"f32":"s32"; }
-
 static char* ptx_render(Renderer* self, UOp** uops, int n){ (void)self;
   const char* header = ".version 7.8\n.target sm_80\n.address_size 64\n";
   int ids[64]; int pc=0;

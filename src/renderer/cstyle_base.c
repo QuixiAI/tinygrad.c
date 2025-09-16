@@ -1,6 +1,7 @@
 #include "renderer/cstyle_base.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 void cstyle_ctx_init(CStyleCtx* ctx){ if (!ctx) return; memset(ctx, 0, sizeof(*ctx)); }
 void cstyle_ctx_free(CStyleCtx* ctx){
@@ -82,7 +83,8 @@ static const char* prefix_for_op(Ops op){
 }
 
 void cstyle_ctx_assign_names(CStyleCtx* ctx, UOp** uops, int n){
-  if (!ctx || !uops) return; int c_wmma=0,c_temp=0,c_const=0,c_cast=0,c_gep=0,c_precast=0,c_bidx=0,c_acc=0,c_val=0,c_alu=0,c_ridx=0;
+  if (!ctx || !uops) return;
+  int c_wmma=0,c_temp=0,c_const=0,c_cast=0,c_gep=0,c_precast=0,c_bidx=0,c_acc=0,c_val=0,c_alu=0,c_ridx=0;
   for (int i=0;i<n;i++){
     UOp* u = uops[i]; if (!u) continue;
     if (u->op==OPS_NOOP) continue;

@@ -29,6 +29,7 @@ size_t tg_sb_length(const tg_string_builder* sb);
 char* tg_sb_new_with(const char* a, const char* b);
 char* tg_sb_append_owned(char* base, const char* add);
 char* tg_sb_append_len_owned(char* base, const char* add, size_t len);
+char* tg_sb_append_ownedf(char* base, const char* fmt, ...);
 
 #ifdef __cplusplus
 }

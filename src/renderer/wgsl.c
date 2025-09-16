@@ -197,15 +197,15 @@ static char* wgsl_render(Renderer* self, UOp** uops, int n){ (void)self;
   int lsz[3] = {1,1,1};
   for (int i=0;i<n;i++){
     UOp* u = uops[i]; if (!u || u->op!=OPS_SPECIAL) continue;
-    if (!u->tag) continue; const char* tg = (const char*)u->tag;
+    if (!u->tag) continue;
+    const char* tg = (const char*)u->tag;
     if (strncmp(tg, "lidx", 4)==0) {
       int axis = 0; size_t L=strlen(tg); if (L){ char last=tg[L-1]; if (last>='0'&&last<='9') axis=last-'0'; }
       int bound = 1; if (u->arg.type==ARG_TUPLE2 && u->arg.tuple2.count>=1 && u->arg.tuple2.second) bound = u->arg.tuple2.second[0];
       if (axis>=0 && axis<3 && bound>0) lsz[axis] = bound;
     }
   }
-  char wgs[128]; snprintf(wgs,sizeof(wgs), "@compute @workgroup_size(%d,%d,%d) fn kernel_main(@builtin(workgroup_id) gindex: vec3<u32>, @builtin(local_invocation_id) lindex: vec3<u32>) {\n", lsz[0], lsz[1], lsz[2]);
-  s = tg_sb_append_owned(s, wgs);
+  s = tg_sb_append_ownedf(s, "@compute @workgroup_size(%d,%d,%d) fn kernel_main(@builtin(workgroup_id) gindex: vec3<u32>, @builtin(local_invocation_id) lindex: vec3<u32>) {\n", lsz[0], lsz[1], lsz[2]);
   // minimal SSA: consts, barriers, SPECIAL indices, INDEX, LOAD/STORE, BITCAST, WHERE (with vector support)
   for (int i=0;i<n;i++){
     UOp* u = uops[i]; if (!u || u->op==OPS_NOOP || u->op==OPS_SINK) continue;

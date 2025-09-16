@@ -344,9 +344,11 @@ static char* clang_render(Renderer* self, UOp** uops, int uops_count) {
       char* b = bN?strdup(bN):(u->src[1]->op==OPS_CONST?render_const(u->src[1]):strdup("0"));
       char* c = cN?strdup(cN):(u->src[2]->op==OPS_CONST?render_const(u->src[2]):strdup("0"));
       const char* nm = ssa_add(&map, u);
-      char expr[512]; snprintf(expr, sizeof(expr), "((%s*%s)+(%s))", a, b, c);
-      char line[512]; INDENT(); snprintf(line,sizeof(line),"%s %s = %s;\n", c_type_for(&u->dtype), nm, expr);
-      src = tg_sb_append_owned(src, line); free(a); free(b); free(c); continue;
+      char* expr = tg_sb_append_ownedf(NULL, "((%s*%s)+(%s))", a, b, c);
+      INDENT();
+      src = tg_sb_append_ownedf(src, "%s %s = %s;\n", c_type_for(&u->dtype), nm, expr ? expr : "0");
+      if (expr) free(expr);
+      free(a); free(b); free(c); continue;
     }
     if (u->op==OPS_LOAD && u->src_count>=1){
       const char* ptr = ssa_get(&map, u->src[0]); if (!ptr) ptr = "ptr";
@@ -357,7 +359,6 @@ static char* clang_render(Renderer* self, UOp** uops, int uops_count) {
       char* cond = NULL; if (gateu){ const char* cn = ssa_get(&map, gateu); cond = cn?strdup(cn):(gateu->op==OPS_CONST?render_const(gateu):strdup("0")); }
       const char* nm = ssa_add(&map, u); char line[768]; INDENT();
       // OpenCL image read path (read_imagef)
-      bool did_img=false;
       if (is_opencl(self) && idxu && idxu->op==OPS_INDEX && idxu->src_count>=2){
         size_t tn=0; UOp** bt = uop_toposort(idxu->src[0], &tn);
         int gid=-1; const DType* gdt=&dtypes.float32; if (bt){ for(size_t k=0;k<tn;k++) if (bt[k]->op==OPS_DEFINE_GLOBAL){ gid=(bt[k]->arg.type==ARG_INT)? bt[k]->arg.int_data.i:0; gdt=&bt[k]->dtype; break; } free(bt);}        
@@ -366,7 +367,11 @@ static char* clang_render(Renderer* self, UOp** uops, int uops_count) {
           const char* vtype = (u->dtype.count>1) ? c_vec_type_for_b(self, &u->dtype) : c_type_for_b(self, &u->dtype);
           if (cond && alt) snprintf(line,sizeof(line),"%s %s = ((%s)?read_imagef(data%d, smp, %s):%s);\n", vtype, nm, cond, gid, idxv, alt);
           else snprintf(line,sizeof(line),"%s %s = read_imagef(data%d, smp, %s);\n", vtype, nm, gid, idxv);
-          src = tg_sb_append_owned(src, line); free(idxv); if (alt) free(alt); if (cond) free(cond); continue;
+          src = tg_sb_append_owned(src, line);
+          free(idxv);
+          if (alt) free(alt);
+          if (cond) free(cond);
+          continue;
         }
       }
       const char* vtype = (u->dtype.count>1) ? c_vec_type_for_b(self, &u->dtype) : c_type_for_b(self, &u->dtype);
@@ -465,10 +470,6 @@ static char* clang_render(Renderer* self, UOp** uops, int uops_count) {
     }
   }
   src = tg_sb_append_owned(src, end);
-  // debug: dump when last op is GEP
-  if (uops_count>0){ UOp* last=NULL; for(int i=uops_count-1;i>=0;i--){ if (uops[i] && uops[i]->op!=OPS_NOOP){ last=uops[i]; break; } }
-    if (last && last->op==OPS_GEP){ FILE* fp=fopen("_last_rendered_special.c","wb"); if (fp){ fwrite(src,1,strlen(src),fp); fclose(fp);} }
-  }
   return src; }
 
 Renderer* renderer_cstyle_clang(void) {

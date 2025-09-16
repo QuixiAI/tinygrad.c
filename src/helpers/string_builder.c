@@ -142,3 +142,28 @@ char* tg_sb_append_owned(char* base, const char* add) {
   if (!add) return base;
   return tg_sb_append_len_owned(base, add, strlen(add));
 }
+
+char* tg_sb_append_ownedf(char* base, const char* fmt, ...) {
+  if (!fmt) return base;
+  va_list ap;
+  va_start(ap, fmt);
+  va_list copy;
+  va_copy(copy, ap);
+  int needed = vsnprintf(NULL, 0, fmt, copy);
+  va_end(copy);
+  if (needed < 0) {
+    va_end(ap);
+    return base;
+  }
+  size_t size = (size_t)needed + 1;
+  char* buf = (char*)malloc(size);
+  if (!buf) {
+    va_end(ap);
+    return base;
+  }
+  vsnprintf(buf, size, fmt, ap);
+  va_end(ap);
+  char* out = tg_sb_append_owned(base, buf);
+  free(buf);
+  return out;
+}

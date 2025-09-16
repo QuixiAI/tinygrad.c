@@ -20,6 +20,8 @@ static void cleanup_basic_graph(UOp** nodes, int count) {
   }
 }
 
+static void cleanup_nodes(UOp** nodes, size_t count);
+
 TEST(test_renderer_estimates_simple) {
   UOp* buf = uop_define_global(dtypes.float32, 0);
   UOp* idx = uop_const(dtypes.int32, 0);
@@ -78,6 +80,61 @@ TEST(test_renderer_estimates_range_multiplier) {
   TEST_ASSERT_EQUAL_INT64(32, est.lds);
 
   cleanup_basic_graph(nodes, (int)(sizeof(nodes)/sizeof(nodes[0])));
+}
+
+TEST(test_renderer_estimates_special_multiplier) {
+  UOp* buf = uop_define_global(dtypes.float32, 0);
+  UOp* idx = uop_const(dtypes.int32, 0);
+  UOp* ptr = uop_index(buf, idx);
+  UOp* load = uop_load(ptr, dtypes.float32);
+  UOp* spec = uop_special_ex("lidx0", 0, 4, dtypes.int32);
+  UOp* nodes[] = {spec, buf, idx, ptr, load};
+  Estimates est = renderer_estimates_from_uops(nodes, (int)(sizeof(nodes)/sizeof(nodes[0])), 0);
+  TEST_ASSERT_EQUAL_INT64(16, est.lds);  // 4 byte load scaled by SPECIAL bound (4)
+  cleanup_basic_graph(nodes, (int)(sizeof(nodes)/sizeof(nodes[0])));
+}
+
+TEST(test_renderer_estimates_wmma_flops) {
+  DType a_dt = dtype_vec(&dtypes.float16, 16);
+  DType b_dt = dtype_vec(&dtypes.float16, 16);
+  DType c_dt = dtype_vec(&dtypes.float32, 16);
+  UOp* a = uop_vconst(a_dt, NULL, 0);
+  UOp* b = uop_vconst(b_dt, NULL, 0);
+  UOp* acc = uop_vconst(c_dt, NULL, 0);
+  int first[1] = {0};
+  int second[1] = {0};
+  UOp* w = uop_wmma(a, b, acc, first, second, 1);
+  UOp* nodes[] = {a, b, acc, w};
+  Estimates est = renderer_estimates_from_uops(nodes, (int)(sizeof(nodes)/sizeof(nodes[0])), 0);
+  TEST_ASSERT_TRUE(est.ops > 0);
+  TEST_ASSERT_EQUAL_INT64(1024, est.ops);  // current C implementation constant
+  cleanup_nodes(nodes, sizeof(nodes) / sizeof(nodes[0]));
+}
+
+TEST(test_programspec_mem_estimate_prefers_max_per_gid) {
+  UOp* buf = uop_define_global(dtype_vec(&dtypes.float32, 4), 0);
+  UOp* idx = uop_const(dtypes.int32, 0);
+  UOp* ptr = uop_index(buf, idx);
+  UOp* load_small = uop_load(ptr, dtypes.float32);
+  UOp* load_vec = uop_load(ptr, dtype_vec(&dtypes.float32, 4));
+  UOp* stores[] = {load_small, load_vec};
+  UOp* sink = uop_sink(stores, 2);
+
+  UOp* uops[] = {buf, idx, ptr, load_small, load_vec, sink};
+  ProgramSpec spec = {0};
+  spec.ast = sink;
+  spec.uops = uops;
+  spec.uops_count = (int)(sizeof(uops) / sizeof(uops[0]));
+  spec.estimates = renderer_estimates_from_uops(uops, spec.uops_count, 1);
+  programspec_finalize(&spec);
+
+  TEST_ASSERT_TRUE(spec.estimates.mem >= 16);
+
+  if (spec.globals) free(spec.globals);
+  if (spec.ins) free(spec.ins);
+  if (spec.outs) free(spec.outs);
+  if (spec.vars) free(spec.vars);
+  cleanup_nodes(uops, sizeof(uops) / sizeof(uops[0]));
 }
 
 void setUp(void) {}

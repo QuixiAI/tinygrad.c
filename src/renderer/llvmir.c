@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdint.h>
 
 static const char* llvm_ty(const DType* dt){
@@ -65,11 +66,11 @@ static int align_of(const DType* dt){ const DType* s=dt; if (dt->count>1 && dt->
 static char* llvm_render(Renderer* self, UOp** uops, int n){ (void)self;
   int is_amd = (self && self->device && (strcmp(self->device, "LLVM-AMD")==0 || strcmp(self->device, "AMD")==0));
   // Gather parameters from DEFINE_GLOBAL
-  int ids[64]; const DType* dts[64]; int pc=0;
+  int ids[64]; int pc=0;
   for (int i=0;i<n && pc<64;i++) if (uops[i] && uops[i]->op==OPS_DEFINE_GLOBAL){
     int id = (uops[i]->arg.type==ARG_INT)? uops[i]->arg.int_data.i : 0;
     int seen=0; for (int k=0;k<pc;k++) if (ids[k]==id){ seen=1; break; }
-    if (!seen){ ids[pc]=id; dts[pc]=&uops[i]->dtype; pc++; }
+    if (!seen){ ids[pc]=id; pc++; }
   }
   // compute AMD workgroup attribute if needed
   int required_wg = 1;
@@ -192,11 +193,16 @@ static char* llvm_render(Renderer* self, UOp** uops, int n){ (void)self;
         default: op = NULL; break;
       }
       if (op){
-      char line[256]; snprintf(line,sizeof(line),"  %s = %s %s %s, %s\n", nmv, op, ty, a?a:av, b?b:bv);
+        char line[256]; snprintf(line,sizeof(line),"  %s = %s %s %s, %s\n", nmv, op, ty, a?a:av, b?b:bv);
         s = tg_sb_append_owned(s, line);
-        if (av) free(av); if (bv) free(bv); free(ty); continue;
+        if (av) free(av);
+        if (bv) free(bv);
+        free(ty);
+        continue;
       }
-      if (av) free(av); if (bv) free(bv); free(ty);
+      if (av) free(av);
+      if (bv) free(bv);
+      free(ty);
     }
     // Comparisons
     if ((u->op==OPS_CMPLT || u->op==OPS_CMPEQ || u->op==OPS_CMPNE) && u->src_count==2){
@@ -216,7 +222,10 @@ static char* llvm_render(Renderer* self, UOp** uops, int n){ (void)self;
         switch (u->op){ case OPS_CMPLT: cc="slt"; break; case OPS_CMPEQ: cc="eq"; break; case OPS_CMPNE: cc="ne"; break; default: cc="eq"; }
         char line[256]; snprintf(line,sizeof(line),"  %s = icmp %s %s %s, %s\n", nmv, cc, ty, a?a:av, b?b:bv); s = tg_sb_append_owned(s, line);
       }
-      if (av) free(av); if (bv) free(bv); free(ty); continue;
+      if (av) free(av);
+      if (bv) free(bv);
+      free(ty);
+      continue;
     }
     // Casts
     if (u->op==OPS_CAST && u->src_count>=1){
@@ -280,7 +289,8 @@ static char* llvm_render(Renderer* self, UOp** uops, int n){ (void)self;
       continue;
     }
     if (u->op==OPS_ENDRANGE){
-      if (loop_sp<=0) continue; LoopCtx *lc = &loops[loop_sp-1];
+      if (loop_sp<=0) continue;
+      LoopCtx *lc = &loops[loop_sp-1];
       // go to latch
       char line[256]; snprintf(line,sizeof(line),"  br label %%%s\n%s:\n", lc->latch, lc->latch); s = tg_sb_append_owned(s, line);
       // iv.next and cmp

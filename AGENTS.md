@@ -2,7 +2,22 @@
 
 A simple, open format for guiding coding agents, used by over 20k open-source projects.
 
-Think of AGENTS.md as a README for agents: a dedicated, predictable place to provide the context and instructions to help AI coding agents work on your project.
+Think of AGENTS.md as a README for agents: a dedicated, predictable place to provide the context and instructions to help AI coding agents work on your project.  Keep this file up to date—future agents rely on the quick cues here instead of re-discovering the workflow.
+
+## Philosophy
+
+Welcome, agent. tinygrad.c is the C port of tinygrad—the same minimal, beautiful tensor library, rendered with a stable C ABI. Treat every edit as a chance to make the code tighter and more comprehensible.
+
+- Every line must earn its place. Prefer clarity over clever tricks; a well-written 10 lines in C can replace a maze of macros.
+- Keep functionality changes focused. Do not mix logic edits with unrelated formatting or whitespace churn.
+- Tests guard our parity with Python tinygrad. Any behavioral change should land with tests (new or expanded) and must run cleanly through `make test`.
+- Match the house style: C and header files use two-space indentation, trailing whitespace is frowned upon, and 150 characters per line is the soft ceiling unless an existing file dictates otherwise.
+
+### TL;DR for new agents
+- `make -j$(nproc)` builds everything; `make test` runs all Unity suites.
+- Many modules are still **stubbed** (`return TG_ERR_UNIMPL`). Stubs live in the same relative path as the Python source; real implementations typically live in subdirectories (e.g. `src/tensor/tensor.c`). Remove or replace a stub once the real port lands.
+- Always run a full cycle (`make clean && make && make test`) to catch regressions immediately; investigate and fix every warning, error, crash, or failing test—no shortcuts.
+- If a `deeply_port_*.md` file exists for the subsystem you are touching, review it for the latest TODO list and context before making changes.
 
 ## Setup commands
 
@@ -11,8 +26,10 @@ Think of AGENTS.md as a README for agents: a dedicated, predictable place to pro
 - Run all tests: `make test`
 - Run specific tests: `./build/test_dtype`, `./build/test_tensor`, `./build/test_ops`, `./build/test_resnet18`
 - Run examples: `./build/resnet18_cpu`
+- Rebuild just one test binary: `cmake --build build --target test_NAME`
 
 Advanced:
+- `make -j$(nproc)` — parallel build (faster on multi-core machines).
 - `CLEAN=1 make` — fresh build dir (removes `build/`).
 - `PERSIST_CONAN=1 make` — persist Conan cache across runs by mounting `$HOME/.conan2` in Docker.
 - `CLEAN_CONAN=1 PERSIST_CONAN=1 make` — clear the mounted Conan cache before install.
@@ -26,9 +43,8 @@ cd build && ctest --output-on-failure
 ```
 
 ### Testing instructions
-The project uses Unity test framework with Test-Driven Development (TDD) approach:
-- Tests distributed across multiple suites in `tests/` and `tests/uop/`
-- Total of 75 test cases in UOp subsystem alone
+The project uses the Unity test framework with a Test-Driven Development (TDD) approach:
+- Tests are distributed across multiple suites in `tests/` and `tests/uop/`
 - Dot-reporter style output: `.` for pass, `F` for fail, `X` for crash
 
 Run tests with:
@@ -63,6 +79,11 @@ The project follows a phased approach documented in `PORTING.md`:
 - **Phase 11**: Neural network layers - SGD optimizer implemented
 
 Many modules are stubbed (return `TG_ERR_UNIMPL`) to allow compilation while incrementally porting functionality.
+
+### Stub map
+- Source files directly under `src/` with the header `// Auto-generated stub...` are placeholders. The real implementations usually live in subdirectories (e.g. `src/tensor/tensor.c`, `src/dtype/dtype.c`, `src/runtime/ops_cpu/ops.c`).
+- Matching stub tests live under `tests/**/test_stub_*.c`. They exist only to keep the build green; feel free to delete them when a real implementation + tests are added.
+- Before adding new code, double-check for an existing non-stub version to avoid duplicates.
 
 ## Development workflow
 
@@ -135,16 +156,8 @@ Common Unity assertions:
 4. **Never suppress failures** - Let tests fail naturally
 
 ### Test organization
-- `tests/test_*.c` - Main module tests
-- `tests/uop/test_*.c` - UOp subsystem tests:
-  - `test_ops.c` (21 tests) - Core operations
-  - `test_uop.c` (13 tests) - UOp creation and management
-  - `test_optional.c` (11 tests) - Optional features
-  - `test_symbolic.c` (8 tests) - Symbolic computation
-  - `test_transcendental.c` (7 tests) - Math functions
-  - `test_mathtraits.c` (6 tests) - Mathematical traits
-  - `test_spec.c` (5 tests) - Specifications
-  - `test_upat.c` (4 tests) - Pattern matching
+- `tests/test_*.c` - Module-level suites (tensor, dtype, device, etc.)
+- `tests/uop/test_*.c` - UOp subsystem suites covering ops, optional features, symbolic simplification, transcendental math, pattern matching, and spec handling.
 
 ### Running tests
 After making changes:
