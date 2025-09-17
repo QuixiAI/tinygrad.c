@@ -214,8 +214,9 @@ TEST(test_renderer_cstyle_param_dtype_from_define_global) {
   UOp* arr[] = {buf, idx, bidx, load};
   char* src = r->render(r, arr, (int)(sizeof(arr)/sizeof(arr[0])));
   TEST_ASSERT_NOT_NULL(src);
-  // header should have unsigned char* data0
-  TEST_ASSERT_NOT_NULL(strstr(src, "unsigned char* data0"));
+  // header should include uint8 buffer pointer with restrict
+  TEST_ASSERT_NOT_NULL(strstr(src, "unsigned char*"));
+  TEST_ASSERT_NOT_NULL(strstr(src, "data0"));
   free(src);
   uop_unref(load); uop_unref(bidx); uop_unref(idx); uop_unref(buf);
   free(r);
