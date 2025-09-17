@@ -68,7 +68,7 @@ Milestones & TODOs
   - [x] Shared CStyle base: context for buffers, writes, preliminary names; integrated in WGSL and CStyle param collection.
   - [ ] C-style backend parity
     - [x] Constructors for NV and Intel variants wired up (device/suffix adjustments, Intel subgroup attribute)
-    - [ ] Complete base_rewrite coverage: VECTORIZE, PRECAST, SPECIAL, WMMA stubs, CUSTOM/CUSTOMI, GEP formatting, bool devectorization
+    - [ ] Complete base_rewrite coverage: VECTORIZE, PRECAST, SPECIAL, WMMA stubs, CUSTOM/CUSTOMI, GEP formatting, bool devectorization (current C port still lacks WMMA helpers + matcher parity)
     - [ ] Per-backend adapters: Clang (type_map, float4 typedef, sqrt builtin, AMX hooks), OpenCL (addr qualifiers, barriers, workitem code, image IO), Metal/Intel overrides, CUDA/AMD/NV/HIP/QCOM signatures + caps
     - [ ] Tests: snapshot coverage per backend vs Python
 
