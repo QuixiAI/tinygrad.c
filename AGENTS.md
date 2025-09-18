@@ -34,6 +34,7 @@ Advanced:
 - `PERSIST_CONAN=1 make` — persist Conan cache across runs by mounting `$HOME/.conan2` in Docker.
 - `CLEAN_CONAN=1 PERSIST_CONAN=1 make` — clear the mounted Conan cache before install.
 - `make rebuild` — alias for `CLEAN=1 make`.
+- If Conan can't reach its remotes (permissions or network), stop and ask the user to fix the environment before retrying.
 
 ### Manual build (if needed)
 ```bash

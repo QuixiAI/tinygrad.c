@@ -7,6 +7,10 @@ extern "C" {
 
 #include <stddef.h>
 
+typedef struct _GPtrArray GPtrArray;
+typedef struct _GArray GArray;
+typedef int gboolean;
+
 // Environment variable functions
 const char* tg_getenv(const char* name);
 const char* tg_getenv_default(const char* name, const char* default_val);
@@ -16,6 +20,18 @@ void tg_windows_ansi_enable(void);
 
 // Product function for shapes
 int tg_prod(const int* shape, int len);
+
+// List helpers
+GPtrArray* tg_flatten_ptr_array(GPtrArray* lists);
+typedef struct tg_partition_result {
+    GPtrArray* true_items;
+    GPtrArray* false_items;
+} tg_partition_result_t;
+tg_partition_result_t tg_partition_ptr_array(GPtrArray* items, gboolean (*pred)(void*, void*), void* ctx);
+void tg_partition_result_free(tg_partition_result_t* result);
+int tg_amx_enabled(void);
+void tg_set_amx_enabled(int enabled);
+GPtrArray* tg_partition_both(GPtrArray* items, gboolean (*pred)(void*, void*), void* ctx);
 
 // Global counters (moved from engine/realize)
 typedef struct tg_global_counters {

@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <glib.h>
 #include "helpers/helpers.h"
 #include "compat/fetch.h"
 #include "compat/tqdm.h"
@@ -22,6 +23,16 @@ const char* tg_getenv(const char* name) {
 const char* tg_getenv_default(const char* name, const char* default_val) {
     const char* val = getenv(name);
     return val ? val : default_val;
+}
+
+static int _amx_initialized = 0;
+static int _amx_enabled = 0;
+
+static void _amx_init(void) {
+    if (_amx_initialized) return;
+    const char* v = tg_getenv("AMX");
+    _amx_enabled = (v && *v && strcmp(v, "0") != 0);
+    _amx_initialized = 1;
 }
 
 // Env/platform flags
@@ -514,6 +525,50 @@ int tg_fetch(const char* url, const char* name, const char* subdir, int gunzip, 
   if (gunzip){ char tmpout[1024]; _append_suffix(tmpout,sizeof(tmpout), final, ".tmpgunzip"); int grc = tg_gunzip_impl(tmpdl, tmpout); if (grc!=0){ remove(tmpdl); return grc; } remove(tmpdl); rename(tmpout, final); }
   else { rename(tmpdl, final); }
   snprintf(out_path,out_sz,"%s", final); return 0;
+}
+
+GPtrArray* tg_flatten_ptr_array(GPtrArray* lists) {
+  GPtrArray* out = g_ptr_array_new();
+  if (!lists) return out;
+  for (guint i = 0; i < lists->len; i++) {
+    GPtrArray* sub = g_ptr_array_index(lists, i);
+    if (!sub) continue;
+    for (guint j = 0; j < sub->len; j++) {
+      g_ptr_array_add(out, g_ptr_array_index(sub, j));
+    }
+  }
+  return out;
+}
+
+tg_partition_result_t tg_partition_ptr_array(GPtrArray* items, gboolean (*pred)(void*, void*), void* ctx) {
+  tg_partition_result_t res;
+  res.true_items = g_ptr_array_new();
+  res.false_items = g_ptr_array_new();
+  if (!items) return res;
+  for (guint i = 0; i < items->len; i++) {
+    void* item = g_ptr_array_index(items, i);
+    gboolean keep = pred ? pred(ctx, item) : (item != NULL);
+    if (keep) g_ptr_array_add(res.true_items, item);
+    else g_ptr_array_add(res.false_items, item);
+  }
+  return res;
+}
+
+void tg_partition_result_free(tg_partition_result_t* result) {
+  if (!result) return;
+  if (result->true_items) g_ptr_array_unref(result->true_items);
+  if (result->false_items) g_ptr_array_unref(result->false_items);
+  result->true_items = result->false_items = NULL;
+}
+
+int tg_amx_enabled(void) {
+  _amx_init();
+  return _amx_enabled;
+}
+
+void tg_set_amx_enabled(int enabled) {
+  _amx_initialized = 1;
+  _amx_enabled = enabled ? 1 : 0;
 }
 
 // ---- ctypes-like helpers ----

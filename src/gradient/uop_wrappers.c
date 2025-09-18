@@ -60,31 +60,75 @@ tg_uop_t* tg_uop_reduce_axis(tg_uop_t* src, int reduce_op, int* axes, int axes_c
 
 
 tg_uop_t* tg_uop_substitute(tg_uop_t* uop, tg_substitution_t* substitutions, int count){
-  // Evaluate the expression using the interpreter with variable bindings
-  if (!uop) return uop_const(dtypes.float32, NAN);
-  eval_context_t ctx = {0};
-  if (count > 0) {
-    ctx.binding_count = count;
-    ctx.bindings = (var_binding_t*)calloc(count, sizeof(var_binding_t));
-    for (int i=0;i<count;i++) {
-      ctx.bindings[i].var_uop = substitutions[i].variable;
-      // Build scalar np_array for the value
-      size_t one = 1;
-      np_array_t* arr = np_ones(1, &one, &dtypes.float32);
-      float val = NAN;
-      if (substitutions[i].value && substitutions[i].value->op==OPS_CONST && substitutions[i].value->arg.type==ARG_CONST) {
-        val = (float)substitutions[i].value->arg.const_data.const_value;
+  if (!uop) return NULL;
+  if (count <= 0 || !substitutions) return uop_ref(uop);
+
+  UOp** from = (UOp**)malloc((size_t)count * sizeof(UOp*));
+  UOp** to   = (UOp**)malloc((size_t)count * sizeof(UOp*));
+  if (!from || !to) {
+    if (from) free(from);
+    if (to) free(to);
+    return uop_ref(uop);
+  }
+
+  size_t used = 0;
+  for (int i = 0; i < count; i++) {
+    UOp* var = substitutions[i].variable;
+    UOp* val = substitutions[i].value;
+    if (!var || !val) continue;
+    from[used] = var;
+    to[used] = val;
+    used++;
+  }
+
+  UOp* result = NULL;
+  if (used == 0) {
+    result = uop_ref(uop);
+  } else {
+    result = uop_substitute(uop, from, to, used, NULL);
+  }
+
+  free(from);
+  free(to);
+
+  if (!result) return NULL;
+
+  if (result->op != OPS_CONST) {
+    size_t topo_count = 0;
+    UOp** nodes = uop_toposort(result, &topo_count);
+    bool has_var = false;
+    for (size_t i = 0; i < topo_count; i++) {
+      if (nodes[i] && nodes[i]->op == OPS_DEFINE_VAR) {
+        has_var = true;
+        break;
       }
-      ((float*)arr->data)[0] = val;
-      ctx.bindings[i].data = arr;
+    }
+    if (nodes) free(nodes);
+
+    if (!has_var) {
+      eval_context_t ctx = {0};
+      np_array_t* arr = uop_interpreter_evaluate_with_context(result, &ctx);
+      double scalar = 0.0;
+      if (arr) {
+        if (dtypes_is_float(&arr->dtype)) {
+            if (dtype_eq(&arr->dtype, &dtypes.float64)) scalar = ((double*)arr->data)[0];
+            else scalar = ((float*)arr->data)[0];
+        } else if (dtypes_is_int(&arr->dtype)) {
+            scalar = (double)((int32_t*)arr->data)[0];
+        } else if (dtypes_is_unsigned(&arr->dtype)) {
+            scalar = (double)((uint32_t*)arr->data)[0];
+        } else {
+            scalar = np_array_get_scalar(arr);
+        }
+      }
+      if (arr) np_free(arr);
+      DType dt = result->dtype.count ? result->dtype : dtypes.float32;
+      uop_unref(result);
+      return uop_const(dt, scalar);
     }
   }
-  np_array_t* result = uop_interpreter_evaluate_with_context(uop, &ctx);
-  float scalar = np_array_get_scalar(result);
-  // Free context arrays
-  for (int i=0;i<ctx.binding_count;i++) { if (ctx.bindings[i].data) np_free(ctx.bindings[i].data); }
-  free(ctx.bindings);
-  return uop_const(dtypes.float32, scalar);
+
+  return result;
 }
 
 tg_uop_t* tg_uop_ssimplify(tg_uop_t* uop){ if (uop->op==OPS_CONST) { uop_ref(uop); return uop; } return uop_ssimplify(uop); }

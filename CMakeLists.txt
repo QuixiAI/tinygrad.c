@@ -72,6 +72,51 @@ if (TARGET ZLIB::ZLIB)
   target_compile_definitions(fetch PUBLIC TG_HAVE_ZLIB=1)
 endif()
 
+# ---- functools/operator/itertools compat helpers ----
+add_library(functools STATIC
+  src/compat/functools.c
+)
+target_include_directories(functools PUBLIC ${CMAKE_SOURCE_DIR}/src/compat)
+target_link_libraries(functools PUBLIC glib::glib)
+
+add_library(tg_operator STATIC
+  src/compat/operator.c
+)
+target_include_directories(tg_operator PUBLIC ${CMAKE_SOURCE_DIR}/src/compat ${CMAKE_SOURCE_DIR}/include)
+
+add_library(itertools STATIC
+  src/compat/itertools.c
+)
+target_include_directories(itertools PUBLIC ${CMAKE_SOURCE_DIR}/src/compat)
+target_link_libraries(itertools PUBLIC glib::glib)
+
+add_library(hash STATIC
+  src/compat/hash.c
+)
+target_include_directories(hash PUBLIC ${CMAKE_SOURCE_DIR}/src/compat)
+
+add_library(reflection STATIC
+  src/compat/reflection.c
+)
+target_include_directories(reflection PUBLIC ${CMAKE_SOURCE_DIR}/src/compat)
+target_link_libraries(reflection PUBLIC glib::glib)
+
+add_library(pickle STATIC
+  src/compat/pickle.c
+)
+target_include_directories(pickle PUBLIC ${CMAKE_SOURCE_DIR}/src/compat)
+
+add_library(tg_sys STATIC
+  src/compat/sys.c
+)
+target_include_directories(tg_sys PUBLIC ${CMAKE_SOURCE_DIR}/src/compat)
+if (CMAKE_DL_LIBS)
+  target_link_libraries(tg_sys PUBLIC ${CMAKE_DL_LIBS})
+endif()
+if (TARGET glib::glib)
+  target_link_libraries(tg_sys PUBLIC glib::glib)
+endif()
+
 # ---- Core object libraries ----
 add_library(tg_tensor OBJECT
   src/tensor/tensor.c
@@ -139,6 +184,9 @@ if(TARGET tg_helpers)
   if (TARGET CURL::libcurl)
     target_compile_definitions(tg_helpers PUBLIC TG_HAVE_CURL=1)
   endif()
+  if (TARGET glib::glib)
+    target_link_libraries(tg_helpers PUBLIC glib::glib)
+  endif()
   if (TARGET capstone::capstone OR TARGET Capstone::capstone)
     target_compile_definitions(tg_helpers PUBLIC TG_HAVE_CAPSTONE=1)
     if (TARGET capstone::capstone)
@@ -162,6 +210,9 @@ if (TARGET tg_uop)
   # Ensure Z3 headers are available when compiling uop sources
   target_link_libraries(tg_uop PUBLIC z3::libz3)
   target_compile_definitions(tg_uop PUBLIC TG_HAVE_Z3=1 HAVE_Z3=1)
+  if (TARGET glib::glib)
+    target_link_libraries(tg_uop PUBLIC glib::glib)
+  endif()
 endif()
 add_stub_obj(tg_gradient      STUB_GRADIENT)
 if(TARGET tg_gradient)
@@ -199,7 +250,7 @@ add_library(tinygradc STATIC
 target_include_directories(tinygradc PUBLIC ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/src/compat)
 
 # Link compat libs and GSL to tinygradc
-target_link_libraries(tinygradc PUBLIC numpy tqdm fetch GSL::gsl GSL::gslcblas)
+target_link_libraries(tinygradc PUBLIC numpy tqdm fetch functools tg_operator itertools hash reflection pickle tg_sys GSL::gsl GSL::gslcblas)
 if (TARGET ZLIB::ZLIB)
   target_link_libraries(tinygradc PUBLIC ZLIB::ZLIB)
   target_compile_definitions(tinygradc PUBLIC TG_HAVE_ZLIB=1)

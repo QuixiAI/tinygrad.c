@@ -1078,6 +1078,54 @@ TEST(test_bounds_apply_and_substitute)
   ASSERT(r == a);
 }
 
+TEST(test_uop_substitute_replaces_leaf)
+{
+  UOp* a = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, NULL, "a");
+  UOp* b = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, NULL, "b");
+  UOp* c = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, NULL, "c");
+
+  UOp* sum = uop_add(a, b);
+  UOp* expr = uop_mul(sum, c);
+
+  UOp* from[] = { a };
+  UOp* to[] = { c };
+  UOp* substituted = uop_substitute(expr, from, to, 1, NULL);
+
+  ASSERT(substituted != NULL);
+  ASSERT(substituted->op == OPS_MUL);
+  ASSERT(substituted->src_count == 2);
+  ASSERT(substituted->src[0]->op == OPS_ADD);
+  ASSERT(substituted->src[0]->src[0] == c);
+  ASSERT(substituted->src[0]->src[1] == b);
+  ASSERT(substituted->src[1] == c);
+
+  // Original nodes stay unchanged
+  ASSERT(sum->src[0] == a);
+  ASSERT(sum->src[1] == b);
+
+  uop_unref(substituted);
+  uop_unref(expr);
+  uop_unref(a);
+  uop_unref(b);
+  uop_unref(c);
+}
+
+TEST(test_uop_substitute_root_replacement)
+{
+  UOp* a = uop_new(OPS_DEFINE_VAR, dtypes.float32, NULL, 0, NULL, "a");
+  UOp* c = uop_const(dtypes.float32, 3.0);
+
+  UOp* from[] = { a };
+  UOp* to[] = { c };
+  UOp* substituted = uop_substitute(a, from, to, 1, NULL);
+
+  ASSERT(substituted == c);
+
+  uop_unref(substituted);
+  uop_unref(a);
+  uop_unref(c);
+}
+
 TEST(test_valid_shortcuts_where)
 {
   UOp* x = uop_new(OPS_DEFINE_VAR, dtypes.int32, NULL, 0, NULL, "x");
